@@ -1,160 +1,18 @@
 import sys
 import pickle
+import logging
 import os
 import cv2
+import argparse
+import time
 from matplotlib import pyplot as plt
 import numpy as np
+
+import star_map
 
 import numpy as np
 from scipy.spatial.distance import cdist
 from scipy.optimize import linear_sum_assignment
-
-# -------------------------
-# Step 1: Build signatures
-# -------------------------
-def build_signature(points, k=None):
-    coords = points[:, :2]
-    radii = points[:, 2]
-    dist_matrix = cdist(coords, coords)
-    np.fill_diagonal(dist_matrix, np.inf)
-    
-    signatures = []
-    for i in range(len(points)):
-        dists = np.sort(dist_matrix[i])
-        if k is not None:
-            dists = dists[:k]
-        sig = np.concatenate([dists, [radii[i]]])
-        signatures.append(sig)
-    return signatures
-
-
-# -------------------------
-# Step 2: Candidate matching
-# -------------------------
-def candidate_matching(A, B, k=5, max_cost=5.0):
-    sigA = build_signature(A, k=k)
-    sigB = build_signature(B, k=k)
-
-    cost = np.zeros((len(sigA), len(sigB)))
-    for i, sA in enumerate(sigA):
-        for j, sB in enumerate(sigB):
-            m = min(len(sA), len(sB))
-            cost[i, j] = np.linalg.norm(sA[:m] - sB[:m])
-
-    row_ind, col_ind = linear_sum_assignment(cost)
-
-    matches = []
-    for i, j in zip(row_ind, col_ind):
-        if cost[i, j] < max_cost:
-            matches.append((i, j, cost[i, j]))
-    return matches
-
-
-# -------------------------
-# Step 3: Similarity transform (rotation + translation + scale)
-# -------------------------
-def estimate_similarity_transform(A_coords, B_coords):
-    """
-    Compute scale, rotation (2x2), and translation (2,)
-    such that B aligns with A.
-    """
-    centroid_A = np.mean(A_coords, axis=0)
-    centroid_B = np.mean(B_coords, axis=0)
-
-    AA = A_coords - centroid_A
-    BB = B_coords - centroid_B
-
-    # SVD for rotation
-    H = BB.T @ AA
-    U, _, Vt = np.linalg.svd(H)
-    R = Vt.T @ U.T
-    if np.linalg.det(R) < 0:
-        Vt[1, :] *= -1
-        R = Vt.T @ U.T
-
-    # Scale factor
-    var_B = np.sum(np.square(BB))
-    s = np.trace((BB @ R).T @ AA) / var_B
-
-    # Translation
-    t = centroid_A - s * (R @ centroid_B)
-
-    return s, R, t
-
-
-def apply_similarity_transform(points, s, R, t):
-    coords = points[:, :2]
-    transformed = (s * (coords @ R.T)) + t
-    return np.hstack([transformed, points[:, 2:3]])
-
-
-def refine_with_consistency(A, B_aligned, tol=3.0, min_fraction=0.6):
-    """
-    Check if alignment explains most points.
-    Returns final matches if consistent, else [].
-    """
-    dist = cdist(A[:, :2], B_aligned[:, :2])
-
-    # Hungarian for best assignment
-    row_ind, col_ind = linear_sum_assignment(dist)
-    matches = [(i, j, dist[i, j]) for i, j in zip(row_ind, col_ind) if dist[i, j] < tol]
-
-    # Fraction of explained points (coverage)
-    coverage_A = len({i for i, _, _ in matches}) / len(A)
-    coverage_B = len({j for _, j, _ in matches}) / len(B_aligned)
-    coverage = min(coverage_A, coverage_B)
-
-    if coverage >= min_fraction:
-        return matches
-    else:
-        return []  # reject false positive
-
-# -------------------------
-# Step 4: Full pipeline
-# -------------------------
-def match_point_sets(A, B, k=5, max_cost=5.0, refine=True):
-    # Step 1-2: Candidate matches
-    matches = candidate_matching(A, B, k=k, max_cost=max_cost)
-    if len(matches) < 2:
-        return []
-
-    # Extract matched coordinates
-    A_coords = np.array([A[i, :2] for i, _, _ in matches])
-    B_coords = np.array([B[j, :2] for _, j, _ in matches])
-
-    # Step 3: Estimate similarity transform
-    s, R, t = estimate_similarity_transform(A_coords, B_coords)
-    # Force positive scale
-    if s < 0:
-        s = -s
-        R = -R
-
-    # Option B, does not seem to work so good
-    #  # Step 4: Refinement
-    #  if refine:
-    #      B_aligned = apply_similarity_transform(B, s, R, t)
-    #      matches = refine_with_consistency(A, B_aligned, tol=3.0, min_fraction=0.6)
-    #      #dist = cdist(A[:, :2], B_aligned[:, :2])
-    #      #row_ind, col_ind = linear_sum_assignment(dist)
-    #      #refined = []
-    #      #for i, j in zip(row_ind, col_ind):
-    #      #    if dist[i, j] < max_cost:
-    #      #        refined.append((i, j, dist[i, j]))
-    #      #return refined, (s, R, t)
-
-
-    # Step 4: Refinement
-    if refine:
-        B_aligned = apply_similarity_transform(B, s, R, t)
-        dist = cdist(A[:, :2], B_aligned[:, :2])
-        row_ind, col_ind = linear_sum_assignment(dist)
-        refined = []
-        for i, j in zip(row_ind, col_ind):
-            if dist[i, j] < max_cost:
-                refined.append((i, j, dist[i, j]))
-        return refined, (s, R, t)
-
-    return matches, (s, R, t)
 
 def find_stars(image_path, 
                gray_filter_threshold = 64,
@@ -394,47 +252,56 @@ def match_images(reference_image,
                  tile_image,
                  show_images = False):
     A = np.array(find_stars(reference_image,
-                           show_images=show_images))#, dtype=float)
+                           show_images=show_images), dtype=float)
     B = np.array(find_stars(tile_image,
                             show_images=show_images,
-                            gray_filter_threshold = 120))#, dtype=float)
+                            gray_filter_threshold = 120), dtype=float)
 
     print("Ref image has %i stars"%(len(A),))
     print("Tile image has %i stars"%(len(B),))
 
-    #A = np.array([[0,0,1], [10,0,1], [0,10,1], [10,10,2], [5,5,1.5]])
+    ref_map = star_map.StarMap(A)
+    tile_map = star_map.StarMap(B)
 
-    # Generate B with scale, rotation, translation
-    theta = np.deg2rad(20)
-    R_true = np.array([[np.cos(theta), -np.sin(theta)],
-                       [np.sin(theta),  np.cos(theta)]])
-    s_true = 1.3
-    t_true = np.array([4, -3])
+    scores = ref_map.match_tile(tile_map,
+                                 max_angle_diff = 20
+                                )
 
-    #B = np.array([[0,0,1], [10,0,1], [0,10,1], [10,10,2]])  # missing center
-    B[:, :2] = (s_true * (B[:, :2] @ R_true.T)) + t_true
-    #B[:, 2] += np.random.normal(0, 0.1, size=len(B))
+    star_map.plot_map(ref_map, "Reference Map")
+    star_map.plot_map(tile_map, "Tile Map")
 
-    matches, (s_est, R_est, t_est) = match_point_sets(A, B, k=3, max_cost=2000.0)
+    # s = types.SimpleNamespace()
+    # s.size_adj_factor = 1
+    # s.adj_angle = 270   
+    # tile_rotated = tile_map.adjust_to_score(s)
+    # plot_map(tile_rotated, "Tile Map rotated")
 
-    matched_ref_stars = []
-    matched_tile_stars = []
 
-    print("Matches (A idx → B idx):")
-    for i, j, d in matches:
-        print(f"A[{i}] ↔ B[{j}]  (dist {d:.2f})")
-        matched_ref_stars.append(A[i])
-        matched_tile_stars.append(B[j])
+    for score in scores[:3]:
+        adj_map = tile_map.adjust_to_score(score)
+        star_map.plot_map(adj_map, "Adjusted solution with score %.3f"%(score.get_score(), ))
 
-    print("\nEstimated scale:", s_est)
-    print("Estimated rotation:\n", R_est)
-    print("Estimated translation:", t_est)
+def main():
+    global _log
 
-    draw_matches(ref_img = reference_image,
-                 tile_img = tile_image, 
-                 match_ref_stars = matched_ref_stars, 
-                 match_tile_stars = matched_tile_stars)
+    parser = argparse.ArgumentParser(description="Mock mode checker options")
+    parser.add_argument("-L", "--logfile",          dest="logfile",                 default=None, help="Path to log file")
+    parser.add_argument("--reference_image",        dest="reference_image",         default=None, help="ID for the map to use as reference")
+    parser.add_argument("--tile_image",             dest="tile_image",              default=None, help="ID for the map to use as tile")
+    args =  parser.parse_args()
 
-match_images("reference_0.jpg", "tile_0.jpg", show_images=True)
-#match_images("reference_0.jpg", "fake_tile_1.jpg", show_images=True)
-input()
+    if args.logfile is None:
+        args.logfile = os.path.splitext(os.path.basename(sys.argv[0]))[0] + time.strftime("%y%m%d_%H%M%S") + ".log"
+    _log = star_map.init_logger(name = sys.argv[0], 
+                    log_file = args.logfile,
+                    file_level=logging.DEBUG, 
+                    console_level=logging.INFO)
+    _log.info("Logger name: %s"%(args.logfile,))
+
+
+    match_images(args.reference_image, args.tile_image, show_images=True)
+    #match_images("reference_0.jpg", "fake_tile_1.jpg", show_images=True)
+    input()
+
+if __name__ == "__main__":
+    main()
