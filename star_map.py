@@ -4,11 +4,13 @@ import sys
 import os
 import time
 import types
+import random
 
 _def_closest_stars_to_check = 3
 _def_max_dist_diff = 50
 _def_max_size_diff = 50
 _def_stop_after_miss_stars = 5
+_def_plot_results = 5
 _def_max_angle_diff = None
 
 STAR_X = 0
@@ -16,6 +18,30 @@ STAR_Y = 1
 STAR_SZ = 2
 
 import logging
+
+pending_improvements = '''
+NEXT STEPS:
+-1 Change the way to do size calibration not to rely on star size but distance. Should be way more precise!
+
+0. Check why, when the same map is evaluated out of different start stars, different scale factors come up although angle and 
+   score is very similar.
+   Once solved, re-enable optimization after # Check if this combination has been evaluated already
+
+1. Receive an input parameter of the expected number of tiles on the map, corresponding to the number of tiles on the puzzle
+   This size will be used to calculate the max distance (with a good marging) for which to calculate distances from a star
+   Comparison will be made for x,x and y,y coordinates, no need to calculate the actual distance to know if we..., you get it!
+
+2. For the angle error, convert it to a distance as the portion of a circle with the given angle or radius r = star_distance
+   This will tolerate big angle errors on close stars while properly penalizing big angle differences on separated stars.
+   weight the error agains the angle distance or whatever comparison we are doing for distance errors. Error percentage could go
+   above 100% but that's ok since we want large errors to be properly penalized
+
+3. Count unmatched stars on the reference map. Still not sure how to identify which ones to count. Try to build a poligon with 
+   Lines encompasing all matched stars and test those inside? Figure out how to add it into the score.
+
+4. Check how are we handling the score for unmatched stars
+
+'''
 
 def init_logger(name: str, log_file: str, file_level=logging.INFO, console_level=logging.DEBUG):
     global _log
@@ -66,6 +92,7 @@ def angle_abs_diff(a, b):
         d = 360 - d
     return d
 
+_next_score_ID = 0
 class Score:
     def __init__(self, ref_refA_star, 
                        ref_refB_star,
@@ -73,6 +100,7 @@ class Score:
                        tile_refB_star,
                        size_adj_factor,
                        adj_angle):
+        global _next_score_ID
         self.ref_refA_star = ref_refA_star
         self.ref_refB_star = ref_refB_star
         self.tile_refA_star = tile_refA_star
@@ -81,42 +109,71 @@ class Score:
         self.adj_angle = adj_angle
         self._tile_star_scores = {}
         self._tile_star_matches = {}
+        self._mappings = None
+        self.ranking = None
+        self.score = None
+        self.ID = _next_score_ID
+        _next_score_ID += 1
     
+    def set_ranking(self, ranking):
+        self.ranking = ranking
+
+    def match_candidate_stars(self, ref_A, ref_B, tile_A, tile_B):
+        return self._mappings[tile_A] == ref_A and self._mappings[tile_B] == ref_B
+
+    def finalize(self):
+        self._mappings = {}
+        self._mappings.update(self._tile_star_matches)
+        self._mappings[self.tile_refA_star] = self.ref_refA_star
+        self._mappings[self.tile_refB_star] = self.ref_refB_star
+        self.score = self._calculate_score()
+
     def register_tile_star_score(self, star, score, matched_star):
+        assert self._mappings is None, "Can't add a new star after score has been finalized!"
         self._tile_star_scores[star] = score
         self._tile_star_matches[star] = matched_star
 
-    def get_score(self):
-        return sum(self._tile_star_scores.values())
+    def _calculate_score(self):
+        return sum(self._tile_star_scores.values()) / (len(self._tile_star_scores))
 
     def print_summary(self, show_hdr, score_bar_point_size = None, list_matches = False):
         if show_hdr:
-            _log.info(r"refA_stars refB_stars   Size    Adj")
-            _log.info( "Ref  Tile  Ref  Tile   Factor  Angle   Score")
-        score = self.get_score()
+            _log.info("")
+            _log.info(r"ID    rank  refA_stars  refB_stars   Size    Adj")
+            _log.info( "ID     ing  Ref   Tile  Ref   Tile   Factor  Angle   Score")
+            _log.info( "---------------------------------------------------------------")
         if score_bar_point_size is not None:
-            score_bar = int(score * score_bar_point_size) * "*"
+            score_bar = int(self.score * score_bar_point_size) * "*"
         else:
             score_bar = ""
 
-
-        _log.info(f"{self.ref_refA_star:4}  "
-                  f"{self.tile_refA_star:4}  "
-                  f"{self.ref_refB_star:4}  "
-                  f"{self.tile_refB_star:4}  "
-                  f"{self.size_adj_factor:6.3f}  "
-                  f"{self.adj_angle:6.1f}  "
-                  f"{score:7.2f}  "
+        _log.info(f"{self.ID:<5}  "
+                  f"{self.ranking if self.ranking is not None else "N/A":<4}  "
+                  f"{self.ref_refA_star:<5} "
+                  f"{self.tile_refA_star:<5} "
+                  f"{self.ref_refB_star:<5} "
+                  f"{self.tile_refB_star:<5}  "
+                  f"{self.size_adj_factor:<6.3f}  "
+                  f"{self.adj_angle:<6.2f}  "
+                  f"{self.score:<7.2f}  "
                   f"{score_bar}"
                   )
         if list_matches:
+            _log.info( "")
             _log.info( "    Tile Star  Match Ref  Score")
-            _log.info(f"    {self.tile_refA_star:9}  {self.ref_refA_star:9}  RefA")
-            _log.info(f"    {self.tile_refB_star:9}  {self.ref_refB_star:9}  RefB")
-            for ts, rs in self._tile_star_matches.items():
-                _log.info(f"    {ts:9}  {rs:9}  {self._tile_star_scores[ts]:.2f}")
+            _log.info( "  --------------------------------")
+            
+            for ts in range(len(self._mappings)):
+                rs = self._mappings[ts]
+                if ts in self._tile_star_scores:
+                    _log.info(f"    {ts:9}  {rs:9}  {self._tile_star_scores[ts]:.2f}")
+                elif ts == self.tile_refA_star:
+                    _log.info(f"    {ts:9}  {rs:9}  RefA")
+                else:
+                    _log.info(f"    {ts:9}  {rs:9}  RefB")
 
 class StarMap:
+
     def __init__(self, stars):
         self._stars = stars
         self._star_distances = None
@@ -210,6 +267,7 @@ class StarMap:
                           max_angle_diff = _def_max_angle_diff,
                           closest_stars_to_check = _def_closest_stars_to_check,
                           stop_after_miss_stars = _def_stop_after_miss_stars,
+                          show_result_details = _def_plot_results,
                           ):
         ''' This algoritm will test each star on the reference map against each start on the tile map
 The initial pair of stars (ref_A) is assumed to be the same and a size adjustment factor is
@@ -256,6 +314,7 @@ For each match the following info is saved:
   at the reference map have no match with any star on the tile side. Define how this affects
   the score.
 '''
+        _log.info("Matching stars...")
         # This algoritm will test each star on the reference map against each start on the tile map
         scores = []
         for ref_refA_star in range(len(self._stars)):
@@ -274,6 +333,11 @@ For each match the following info is saved:
 
                 for ref_refB_star in self._stars_by_distance[ref_refA_star][:closest_stars_to_check]:
                     for tile_refB_star in tile._stars_by_distance[tile_refA_star][:closest_stars_to_check]:
+                        # Check if this combination has been evaluated already
+                        #if any([score.match_candidate_stars(ref_refA_star, ref_refB_star, tile_refA_star, tile_refB_star) for score in scores]):
+                        #    _log.debug(f"Combination already verified: ref_refA_star={ref_refA_star}, ref_refB_star={ref_refB_star}, tile_refA_star={tile_refA_star}, tile_refB_star={tile_refB_star}")
+                        #    continue
+
                         # Then, each of the {closest_stars_to_check} closest stars for the ref_A star on both the reference
                         # map and the tile map is assumed to match each other. This second assumed star match is ref_B. ref_B stars
                         # will be checked to have the appropiate size. ref_B tile star's adjusted size should no more than 
@@ -300,13 +364,6 @@ For each match the following info is saved:
                         tile_max_star_dist_adj = tile._max_distance * tile_scale_factor
                         tile_max_star_size_adj = tile._max_size * tile_scale_factor
                         
-                        _log.debug("    Tile comparison parameters:")
-                        _log.debug("      |--> Distance adjustment factor: %.4f"%(tile_scale_factor,))
-                        _log.debug("      |--> Adjustment angle: %.3f deg"%(adj_angle,))
-                        _log.debug("      |--> max star size of stars on tile (adjusted): %.4f"%(tile_max_star_size_adj,))
-                        _log.debug("      \\--> max star distance of stars on tile (adjusted): %.4f"%(tile_max_star_dist_adj,))
-                        _log.debug("    Comparing all remaining tile stars to match expected angles and distances on ref map stars")
-
                         score = Score(ref_refA_star, 
                                       ref_refB_star, 
                                       tile_refA_star, 
@@ -314,6 +371,15 @@ For each match the following info is saved:
                                       size_adj_factor,
                                       adj_angle)
                         scores.append(score)
+
+                        _log.debug("    Tile comparison parameters:")
+                        _log.debug("      |--> Score ID: %i"%(score.ID,))
+                        _log.debug("      |--> Distance adjustment factor: %.4f"%(tile_scale_factor,))
+                        _log.debug("      |--> Adjustment angle: %.3f deg"%(adj_angle,))
+                        _log.debug("      |--> max star size of stars on tile (adjusted): %.4f"%(tile_max_star_size_adj,))
+                        _log.debug("      \\--> max star distance of stars on tile (adjusted): %.4f"%(tile_max_star_dist_adj,))
+                        _log.debug("    Comparing all remaining tile stars to match expected angles and distances on ref map stars")
+
 
                         # Once these two are available we are ready to test all the remaining stars on the tile to
                         # have a matching star on the reference following these rules:
@@ -407,14 +473,20 @@ For each match the following info is saved:
                             _log.debug(f"          |--> tile test star score: {tile_test_star_score:.2f}")
                             _log.debug(f"          \\--> tile test star matched ref star: {tile_test_star_matching_star}")
                             score.register_tile_star_score(tile_test_star, tile_test_star_score, tile_test_star_matching_star)
-                        _log.debug(f"    Final score: {score.get_score()}")
+                        score.finalize()
+                        _log.debug(f"    Final score: {score.score}")
         # Sort scores by score
-        scores = sorted(scores, key=lambda x: x.get_score(), reverse=True)
+        scores = sorted(scores, key=lambda x: x.score, reverse=True)
         
-        max_score = max([score.get_score() for score in scores])
+        max_score = max([score.score for score in scores])
         score_bar_point_size = 80 / max_score
         for idx, score in enumerate(scores):
-            score.print_summary(show_hdr = idx == 0, score_bar_point_size = score_bar_point_size, list_matches = idx < 5)
+            if score.score < 75:
+                _log.warning("Not showing results for %i scores below 75"%(len(scores) - idx))
+                break
+            score.set_ranking(idx)
+            score.print_summary(show_hdr = idx <= show_result_details, score_bar_point_size = score_bar_point_size, list_matches = idx < show_result_details)
+            
         
         return scores
 
@@ -461,54 +533,72 @@ _tile_map_A_0 = [(14.849242404917497, 48.79036790187178, 6),
                  (19.091883092036785, 57.27564927611036, 3),
                  (8.48528137423857, 38.18376618407357, 9),
                  (4.242640687119284, 42.42640687119285, 12)]
-# A.1: No noise
-_tile_map_A_1 = ((20.0, 3.0,12.0), # 0
-                 (22.0, 3.0, 9.0), # 1
-                 (20.0,10.0, 3.0), # 2
-                 (21.0, 7.0, 6.0), # 3
-                 (23.0,11.0,15.0), # 4
-)
-# A.2: translated on X and Y
-_tile_map_A_2 = ((40.0,13.0,12.0), # 0
-                 (42.0,13.0, 9.0), # 1
-                 (40.0,20.0, 3.0), # 2
-                 (41.0,17.0, 6.0), # 3
-                 (43.0,21.0,15.0), # 4
-)
 
-#  tile B.0
-#  10 |-----1---------------
-#     |     .    .    .    . 
-#     |     .    .    .    . 
-#     |     .    .    .    . 
-#     |     .    .    .    . 
-#  5  |----------3----2-------
-#     |     .    .    .    . 
-#     |     .    .    .    . 
-#     |     .    .    .    . 
-#     |     .    .    .    . 
-#  0  |     .    .    .    . 
-#     \-----0-----------------
-#      ^    ^    ^    ^    ^ 
-#      0    5    10   15   20
+def make_random_map(star_count, 
+                    min_x = 0,
+                    max_x = 200,
+                    min_y = 0, 
+                    max_y = 200, 
+                    min_size = 3.0, 
+                    max_size = 15.0,
+                    show = True):
+    stars = []
+    if show:
+        print("stars = ( ", end="")
+    for i in range(star_count):
+        x = random.randint(min_x, max_x)
+        y = random.randint(min_y, max_y)
+        s = random.random()*(max_size - min_size) + min_size
+        stars.append((x,y,s))
+        if show and i % 5 == 4:
+            for s in stars[-5:]:
+                print(",".join([f"({s[0]:3}, {s[1]:3}, {s[2]:7.4f}),"]))
+                print("          ", end="")
+    if show:
+        print(")")
+    return stars
 
-_tile_map_B_0 = (( 5.0, 0.0, 1.0), # 0
-                 ( 5.0,10.0, 1.0), # 1
-                 (15.0, 5.0, 1.0), # 2
-                 (10.0, 5.0, 1.0), # 3
+# Generated randomly
+_ref_map_B = ( (125,  58, 13.8136), ( 22,  28, 14.0222), ( 86,  13, 13.1707), (113, 125,  5.9594), (160, 108,  5.9244),
+               (187, 101, 13.8975), (107, 184,  4.8922), (136,  68,  7.5001), (173,  37,  3.4169), ( 46, 107,  6.7624),
+               (182,  17, 12.5987), (127,  94, 11.6738), ( 53,  73, 11.6945), (120,  16, 12.8578), (113,   9, 10.0171),
+               (  3,  85,  3.9413), (197,  11,  9.8497), (119,  65,  8.2744), (112, 183, 11.1139), (108, 121,  9.5019),
+               (  2,  37, 12.9614), ( 11, 114,  6.4297), ( 67, 105, 13.4389), (143, 167, 14.7881), (142,  88,  3.8506),
+               (181,  50,  6.7338), ( 56, 148,  4.8912), ( 34, 133,  9.7866), ( 87, 132, 10.7138), (136, 172, 11.2924),
+               (136, 158,  7.8947), ( 10, 195,  7.0904), (185, 100,  9.9028), ( 77, 162,  9.1321), ( 94,  32,  3.0283),
+               ( 39,  18,  5.4026), ( 13,  48, 13.6766), ( 13, 168, 12.5361), (128,  35, 13.2166), ( 36,   7, 10.5232),
+               (168, 195, 11.5795), ( 71, 158,  9.8988), (153, 128,  8.8511), ( 96,  23, 10.1369), ( 88,  51, 10.1135),
+               (172,  43,  9.1037), (116,  92,  8.1485), (  0, 192,  3.1552), ( 13,  92,  8.1744), ( 58, 134,  3.8905),
+               (  5, 194,  7.7720), ( 41, 146, 13.6196), (113, 151, 12.3357), ( 56, 185,  5.6848), (192,  13,  5.4757),
+               ( 22,  69, 11.8712), ( 43, 176,  4.9073), ( 43, 147,  4.7443), ( 81,  53, 11.7334), ( 57,  92,  3.7397),
+               (116,  33,  3.8162), (182, 102,  7.7007), ( 83, 111, 14.8109), (123,  49,  4.1300), (110,  73,  7.9494),
+               ( 62,  99, 12.7524), ( 47, 192, 13.9073), (191, 130,  3.2117), (146, 141,  6.8338), (113, 168, 10.7620),
+               (123,   9,  9.3201), (145, 171, 14.8666), (127,  89, 11.3895), (134, 177,  5.6828), ( 28,  48, 12.5338),
+               (155, 185, 12.1686), ( 73,  25,  6.8715), (145, 141,  7.1572), ( 61,  39,  7.3979), (193,  72, 10.7284),
+               (144, 192,  7.5517), ( 19, 107,  6.6340), ( 44,   8,  9.1442), ( 89,  32,  5.6818), (  2,  18,  5.8120),
+               (  9,  91,  4.0545), (107,  75,  7.9983), ( 78, 196,  4.5702), (163, 132, 10.5921), (155, 140,  5.7673),
+               (123, 102, 14.3343), (168,  77,  7.0944), (177,  80,  3.8779), ( 41,  77,  8.4378), (194,  55,  8.3564),
+               ( 55,  69, 12.5288), ( 32,  19, 14.5107), ( 28, 105,  3.2453), ( 19, 142,  9.9621), ( 33,  65, 12.9542),
+            )
 
-)
-_tile_map_B_1 = (( 5.1, 0.0, 1.01), # 0
-                 ( 5.0, 9.9, 0.98), # 1
-                 (14.9, 5.0, 1.03), # 2
-                 (10.0, 5.1, 1.00), # 3
-)
-
+# Exact match for stars on B0 map
+_tile_map_B_0 = [
+    _ref_map_B[46],
+    _ref_map_B[90],
+    _ref_map_B[11],
+    _ref_map_B[72],
+    _ref_map_B[24],
+    ]
+# B_0 with rotation of -20 and size factor 3
+_tile_map_B_1 = [(168.56, 56.13, 9.778),
+                 (180.56, 64.53, 17.20),
+                 (181.78, 53.87, 14.00),
+                 (179.73, 48.23, 13.66),
+                 (196.24, 40.95, 4.620)]
 
 _test_maps = dict(ref_A = _ref_map_A,
                   tile_A0 = _tile_map_A_0,
-                  tile_A1 = _tile_map_A_1,
-                  tile_A2 = _tile_map_A_2,
+                  ref_B = _ref_map_B,
                   tile_B0 = _tile_map_B_0,
                   tile_B1 = _tile_map_B_1,
                   )
@@ -519,7 +609,7 @@ def plot_map(map, title):
     # Separate into x, y, size lists
     x = [d[0] for d in map._stars]
     y = [d[1] for d in map._stars]
-    sizes = [300*d[2]/map._max_size for d in map._stars]
+    sizes = [100*d[2]/map._max_size for d in map._stars]
 
     plt.figure(figsize=(6, 6))
     plt.scatter(x, y, s=sizes, c="yellow", alpha=0.6, edgecolors="black")
@@ -548,6 +638,7 @@ def main():
     parser.add_argument("--max_angle_diff",         dest="max_angle_diff",          default=_def_max_angle_diff,          type=float,    help="Max tolerated angle error, as a percentage of 360 degrees. Default: %(default)s%%")
     parser.add_argument("--closest_stars_to_check", dest="closest_stars_to_check",  default=_def_closest_stars_to_check,  type=float,    help="Number of stars closest to every tested reference pair of stars on tile and ref map to test matches for. Default: %(default)s")
     parser.add_argument("--stop_after_miss_stars",  dest="stop_after_miss_stars",   default=_def_stop_after_miss_stars,   type=float,    help="Stop after these many stars from the tile are not found on the reference map. Default: %(default)s")
+    parser.add_argument("--plot_results",           dest="plot_results",            default=_def_plot_results,            type=int,      help="From the best results plot these many. Default: %(default)s")
     args =  parser.parse_args()
 
     if args.ref_map is None or args.ref_map not in _test_maps:
@@ -562,18 +653,18 @@ def main():
                     console_level=logging.INFO)
     _log.info("Logger name: %s"%(args.logfile,))
 
-    #stars = []
-    #stars.append(_ref_map_A[1])
-    #stars.append(_ref_map_A[3])
-    #stars.append(_ref_map_A[10])
-    #stars.append(_ref_map_A[12])
-    #stars.append(_ref_map_A[13])
-    #
-    #tile_A_0 = StarMap(stars).adjust_to_angle_and_size(adj_angle = 45, size_adj_factor = 3)._stars
+    _log.warning(pending_improvements)
+
+    # stars = make_random_map(100)
+    # map = StarMap(stars)
+    # plot_map(map, "random map")
+    # return
+
+    #tile_B_1 = StarMap(_tile_map_B_0).adjust_to_angle_and_size(adj_angle = -20, size_adj_factor = 1.2)._stars
     #import pprint
-    #pprint.pprint(tile_A_0)
+    #pprint.pprint(tile_B_1)
     #return
-    
+
     ref_map = StarMap(_test_maps[args.ref_map])
     tile_map = StarMap(_test_maps[args.tile_map])
     scores = ref_map.match_tile(tile_map,
@@ -582,6 +673,7 @@ def main():
                                  max_angle_diff = args.max_angle_diff,
                                  closest_stars_to_check = args.closest_stars_to_check,
                                  stop_after_miss_stars = args.stop_after_miss_stars,
+                                 show_result_details = args.plot_results,
                                 )
 
     plot_map(ref_map, "Reference Map")
@@ -593,17 +685,13 @@ def main():
     # tile_rotated = tile_map.adjust_to_score(s)
     # plot_map(tile_rotated, "Tile Map rotated")
 
-
-    for score in scores[:3]:
+    for idx, score in enumerate(scores[:args.plot_results]):
         adj_map = tile_map.adjust_to_score(score)
-        plot_map(adj_map, "Adjusted solution with score %.3f"%(score.get_score(), ))
-
-    input()
-
-
-
+        plot_map(adj_map, "Adjusted solution %i. score: %.3f, size: %.3f, angle: %.2f"%(idx, score.score, score.size_adj_factor, score.adj_angle))
 
 if __name__ == "__main__":
     main()
+    input("Hit ENTER to exit...")
+    
 
 
