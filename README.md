@@ -133,11 +133,11 @@ We'll use this formula to calculate the angle distance difference:
        
 Then, the comparisons above call for an angle distance difference in percentage. That is as follows:
 
-          angle_dist_diff_percentage = 100 * angle_dist_diff / (distance within the two stars)
+          angle_dist_diff_percentage = 100 * angle_dist_diff / max_distance_within_stars_on_tile
 
-          angle_dist_diff_percentage = 100 * angle_error * (1/360) * 2 * pi * start_distance
+          angle_dist_diff_percentage = 100 * (angle_error / 360) * 2 * pi * star_distance / max_distance_within_stars_on_tile
           
-          angle_dist_diff_percentage = angle_error * start_distance * K
+          angle_dist_diff_percentage = angle_error * start_distance * K / max_distance_within_stars_on_tile
                     where K = 100 * (1/360) * 2 * pi
 
 ## Optimizations ##
@@ -163,3 +163,23 @@ required steps.
 Since we are trying to avoid measuring the distance between two stars we compare only the X and Y difference as a filter.
 The filter won't be precise and will let some stars outside of range seek in. However, that is better than scanning all
 stars instead.
+
+### Scaling Limits ###
+
+Once a tile has been solved, an assuming future tile images will have the same resolution, the known scaling from the
+recent solution can be used to set a scaling range to limit the search of solution. i.e., last solution had a scaling 
+of 0.7, thus limits can be set from 0.65 to 0.75. Any scaling outside of this range is thrown out before even checking
+for matches.
+
+### Rotation Angle Limits ###
+
+It is not possible to know what rotation a particular tile may have, especially considering there's some which
+don't have a clear long and short side. However, we can tell if the tile is close to a 90 degree factor alignment.
+i.e., close to 0 deg, 90 deg, 180 deg or 270 deg rotation. Thus, using this knowledge, we can set limits for solutions
+to be tested. i.e, setting a limit of 5 deg would allow any ration on these ranges to be verified.
+ * 355 to 5 deg
+ * 85 to 95 deg
+ * 175 to 185 deg
+ * 265 to 275 deg
+
+Any other rotation would be trown out before checking.

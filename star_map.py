@@ -10,7 +10,7 @@ import sample_maps
 _def_closest_stars_to_check = 3
 _def_max_dist_diff = 50
 _def_max_size_diff = 50
-_def_stop_after_miss_stars = 5
+_def_stop_after_miss_stars = 10
 _def_plot_results = 5
 _def_max_angle_dist_diff = 50
 
@@ -24,10 +24,21 @@ angle_dist_K = 100 * (1/360) * 2 * math.pi
 
 pending_improvements = '''
 NEXT STEPS:
-WIP
+
+PENDING
+----------------------
+2. Implement pickle save and restor for star map angles and distances
+
+3. Count unmatched stars on the reference map. Still not sure how to identify which ones to count. Try to build a poligon with 
+   Lines encompasing all matched stars and test those inside? Figure out how to add it into the score.
+
+4. Check how are we handling the score for unmatched stars
+
+
+DONE
+----------------------
 -1 Change the way to do size calibration not to rely on star size but distance. Should be way more precise!
 
-NOT STARTED
 0. Check why, when the same map is evaluated out of different start stars, different scale factors come up although angle and 
    score is very similar.
    Once solved, re-enable optimization after # Check if this combination has been evaluated already
@@ -41,10 +52,7 @@ NOT STARTED
    weight the error agains the angle distance or whatever comparison we are doing for distance errors. Error percentage could go
    above 100% but that's ok since we want large errors to be properly penalized
 
-3. Count unmatched stars on the reference map. Still not sure how to identify which ones to count. Try to build a poligon with 
-   Lines encompasing all matched stars and test those inside? Figure out how to add it into the score.
 
-4. Check how are we handling the score for unmatched stars
 
 '''
 
@@ -119,12 +127,21 @@ class Score:
         self.score = None
         self.ID = _next_score_ID
         _next_score_ID += 1
+        _log.debug(f"New score created: ID: {self.ID}, templ_refA_star={templ_refA_star}, templ_refB_star={templ_refB_star}, tile_refA_star={tile_refA_star}, tile_refB_star={tile_refB_star}")
     
     def set_ranking(self, ranking):
         self.ranking = ranking
 
     def match_candidate_stars(self, ref_A, ref_B, tile_A, tile_B):
-        return tile_A in self._mappings and tile_B in self._mappings and self._mappings[tile_A] == ref_A and self._mappings[tile_B] == ref_B
+        #match = tile_A in self._mappings and tile_B in self._mappings and self._mappings[tile_A] == ref_A and self._mappings[tile_B] == ref_B
+        
+        # only want to match if the stars in question were directly matched. Don't care if these were loosy matched on a match with different match stars
+        match = (ref_A == self.templ_refA_star and ref_B == self.templ_refB_star and tile_A == self.tile_refA_star and tile_B == self.tile_refB_star) or \
+                (ref_B == self.templ_refA_star and ref_A == self.templ_refB_star and tile_B == self.tile_refA_star and tile_A == self.tile_refB_star)
+        if match:
+            _log.debug(f"Match for templ_refA_star={ref_A}, templ_refB_star={ref_B}, tile_refA_star={tile_A}, tile_refB_star={tile_B} found at score {self.ID}")
+        return match
+            
 
     def finalize(self, zero_score = False):
         self._mappings = {}
@@ -182,8 +199,19 @@ class Score:
 
 class StarMap:
 
-    def __init__(self, stars, exp_tile_count = None):
-        self._stars = stars
+    def __init__(self, stars, exp_tile_count = None, from_picture = False):
+        if not from_picture:
+            self._stars = stars
+            self.from_pic_y_correction = None
+        else:
+            max_y = 0
+            for x, y, s in stars:
+                max_y = max(max_y, y)
+            self._stars = []
+            for x, y, s in stars:
+                self._stars.append((x, max_y - y, s))
+            self.from_pic_y_correction = max_y
+
         self._star_distances = None
         self._star_angles = None
         self._max_distance = None
@@ -318,6 +346,8 @@ class StarMap:
                           size_diff_score_factor = 0.5,
                           dist_diff_score_factor = 1.0,
                           angle_dist_score_factor = 1.0,
+                          exp_scale_factor = None,
+                          angle_rotation_ranges = None,
                           ):
         _log.info("Matching stars...")
         # This algoritm will test each star on the reference map against each start on the tile map
@@ -330,8 +360,12 @@ class StarMap:
                 
                 _log.debug(f"Comparing refA stars. From ref map: {templ_refA_star}, from tile map: {tile_refA_star}")
                 
-                for templ_refB_star in self._stars_by_distance[templ_refA_star][:closest_stars_to_check]:
-                    for tile_refB_star in tile._stars_by_distance[tile_refA_star][:closest_stars_to_check]:
+                templ_refB_stars = self._stars_by_distance[templ_refA_star][:closest_stars_to_check]
+                tile_refB_stars = tile._stars_by_distance[tile_refA_star][:closest_stars_to_check]
+                _log.debug("  |--> Templ refB candidates: %s"%(repr(templ_refB_stars),))
+                _log.debug("  \\--> Tile refB candidates: %s"%(repr(tile_refB_stars),))
+                for templ_refB_star in templ_refB_stars:
+                    for tile_refB_star in tile_refB_stars:
                         # Check if this combination has been evaluated already
                         # Re-enable once results make sense! Seeing different scaling factors when the same tile is matched different times out of different start stars
                         if any([score.match_candidate_stars(templ_refA_star, templ_refB_star, tile_refA_star, tile_refB_star) for score in scores]):
@@ -344,6 +378,15 @@ class StarMap:
 
                         tile_scale_factor = templ_map_refAB_dist / tile_map_refAB_dist
 
+                        if exp_scale_factor is not None and \
+                            ( tile_scale_factor < exp_scale_factor[0] or \
+                              tile_scale_factor > exp_scale_factor[1] ):
+                            # should we save an score?
+                            continue
+
+                        tile_max_star_dist_adj = tile._max_distance * tile_scale_factor
+                        tile_max_star_size_adj = tile._max_size * tile_scale_factor
+
                         # Verify both star sizes are on range
                         # And calculate some other values with the purpose of logging
                         templ_refA_size = self._stars[templ_refA_star][STAR_SZ]
@@ -355,6 +398,10 @@ class StarMap:
                         refB_size_error = (100 * abs(tile_refB_adj_size - templ_refB_size) / templ_refB_size)
 
                         adj_angle = _adj_angle(self._star_angles[templ_refA_star][templ_refB_star] - tile._star_angles[tile_refA_star][tile_refB_star])
+
+                        if angle_rotation_ranges is not None and \
+                            not any([adj_angle > r[0] and adj_angle < r[1] for r in angle_rotation_ranges]):
+                            continue
                         
                         score = Score(templ_refA_star, 
                                       templ_refB_star, 
@@ -394,7 +441,7 @@ class StarMap:
                         # > A distance error no larger than max_dist_diff % of the max distance between any star on the tile
                         # > a size error no larger than max_size_diff % of the max size found on the tile (adjusted with the scale factor)
                         # > an Angle distance error no larger than _max_angle_dist %
-                        
+                        zero_score_count = 0
                         for tile_test_star in range(len(tile._stars)):
                             # Skip the two reference stars
                             if tile_test_star in (tile_refA_star, tile_refB_star):
@@ -417,11 +464,15 @@ class StarMap:
                             # So, does not even make sense to try a binary search or something like that
                             # will test in order by distance
                             templ_test_stars_scores = {}
+                            
                             for templ_test_star in self._stars_by_distance[templ_refA_star]:
                                 # Don't include temp ref B star on the comparison, it is already matched
                                 if templ_test_star == templ_refB_star:
                                     continue
                                 templ_test_star_dist = self._star_distances[templ_refA_star][templ_test_star]
+                                # I guess some random maps may put stars very very close to each other?
+                                if templ_test_star_dist < 0.1:
+                                    continue
                                 templ_test_star_size = self._stars[templ_test_star][STAR_SZ]
                                 templ_test_star_angle = self._star_angles[templ_refA_star][templ_test_star]
 
@@ -430,7 +481,7 @@ class StarMap:
                                 _log.debug(f"          | Comparing against ref star {templ_test_star}")
 
                                 # Distance error
-                                dist_err = abs(templ_test_star_dist - tile_test_star_adj_dist) * 100 / templ_test_star_dist
+                                dist_err = abs(templ_test_star_dist - tile_test_star_adj_dist) * 100 / tile_max_star_dist_adj
                                 _log.debug(f"          |   |--> Distance error: {dist_err:.2f}%%")
                                 
                                 if dist_err > max_dist_diff:
@@ -443,7 +494,7 @@ class StarMap:
                                 templ_test_stars_scores[templ_test_star] -= dist_err
                                 
                                 # Size error
-                                size_err = abs(templ_test_star_size - tile_test_star_adj_size) * 100 / templ_test_star_size
+                                size_err = abs(templ_test_star_size - tile_test_star_adj_size) * 100 / tile_max_star_size_adj 
                                 _log.debug(f"          |   |--> Size error: {size_err:.2f}%%")
                                 if size_err > max_size_diff:
                                     _log.debug(f"          |   \\--> Size error above limit, score = 0")
@@ -451,8 +502,11 @@ class StarMap:
                                     continue
                                 templ_test_stars_scores[templ_test_star] -= size_err
                                 
-                                angle_dist_err = angle_abs_diff(templ_test_star_angle, tile_test_star_adj_angle) * templ_test_star_dist * angle_dist_K
+                                angle_err = angle_abs_diff(templ_test_star_angle, tile_test_star_adj_angle)
+                                angle_dist_err = angle_err * templ_test_star_dist * angle_dist_K / tile_max_star_dist_adj
                                 _log.debug(f"          |   |--> Angle distance error: {angle_dist_err:.2f}%%")
+                                _log.debug(f"          |   |     |--> angle_err: {angle_err:.2f}%%")
+                                _log.debug(f"          |   |     \\--> templ_test_star_dist: {templ_test_star_dist:.2f}%%")
                                 if angle_dist_err > max_angle_dist_diff:
                                     _log.debug(f"          |   \\--> Angle distance error above limit, score = 0")
                                     templ_test_stars_scores[templ_test_star] = 0
@@ -470,13 +524,21 @@ class StarMap:
                             _log.debug(f"          |--> tile test star score: {tile_test_star_score:.2f}")
                             _log.debug(f"          \\--> tile test star matched ref star: {tile_test_star_matching_star}")
                             score.register_tile_star_score(tile_test_star, tile_test_star_score, tile_test_star_matching_star)
-                        score.finalize()
+                            if tile_test_star_score == 0:
+                                zero_score_count += 1
+                                if zero_score_count >= stop_after_miss_stars:
+                                    break
+                        score.finalize(zero_score = zero_score_count >= stop_after_miss_stars)
                         best_score = max(best_score, score.score)
                         _log.debug(f"    Final score: {score.score}")
         # Sort scores by score
         scores = sorted(scores, key=lambda x: x.score, reverse=True)
         
         max_score = max([score.score for score in scores])
+        if max_score == 0:
+            _log.error("No good matches found! :(")
+            return None
+        
         score_bar_point_size = 80 / max_score
         for idx, score in enumerate(scores):
             if score.score < 75:
@@ -510,8 +572,7 @@ def plot_map(map, title):
     plt.grid(True)
     plt.show(block = False)
 
-
-def x_y_count(txt):
+def arg_x_y_count(txt):
     s = txt.split(",")
     assert len(s) == 2, "x-y count expects two comma-separated items, got %s"%(repr(txt),)
     try:
@@ -521,6 +582,31 @@ def x_y_count(txt):
         raise argparse.ArgumentError(message = "Can't convert X,Y count into integer: %s"%(repr(txt),))
     return s[0],s[1]
 
+def arg_rot_90deg_range(txt):
+    try:
+        limit = float(txt)
+        assert limit > 0 and limit < 45, "90 degress tolerance must be larger than 0 degrees and less than 45 (which would allow any angle)"
+        # Add two ranges around 360, otherwise it is more difficult to compare
+        ranges = ((-0.001, limit),
+                  (360 - limit, 360.001),
+                  (90 - limit, 90 + limit),
+                  (180 - limit, 180 + limit),
+                  (270 - limit, 270 + limit))
+        return ranges
+    except Exception as ex:
+        print(ex)
+        raise
+
+def arg_scale_factor(txt):
+    s = txt.split(",")
+    assert len(s) == 2, "scale factor expects two comma-separated items, got %s"%(repr(txt),)
+    try:
+        s[0] = float(s[0])
+        s[1] = float(s[1])
+    except ValueError as ex:
+        raise argparse.ArgumentError(message = "Can't convert X,Y count into integer: %s"%(repr(txt),))
+    assert s[0] < s[1], "Scale factor should be two float numbers where the first one is smaller. Got %s"%(repr(txt),)
+    return s[0],s[1]
 
 def main():
     global _log
@@ -532,7 +618,7 @@ def main():
     parser.add_argument("--max_size_diff",          dest="max_size_diff",           default=_def_max_size_diff,           type=float,    help="Max tolerated star size difference, in percentage. Default: %(default)s%%")
     parser.add_argument("--max_dist_diff",          dest="max_dist_diff",           default=_def_max_dist_diff,           type=float,    help="Max tolerated star distance difference as a percentage. Default: %(default)s%%")
     parser.add_argument("--max_angle_dist_diff",    dest="max_angle_dist_diff",     default=_def_max_angle_dist_diff,     type=float,    help="Max tolerated angle-distance error, as a percentage. Default: %(default)s%%")
-    parser.add_argument("--exp_ref_tile_count",     dest="exp_ref_tile_count",      default=None,                         type=x_y_count,    help="Expected count of X and Y tiles/puzzle pieces on the template/reference map. Default: %(default)s%%")
+    parser.add_argument("--exp_ref_tile_count",     dest="exp_ref_tile_count",      default=None,                         type=arg_x_y_count,    help="Expected count of X and Y tiles/puzzle pieces on the template/reference map. Default: %(default)s%%")
     parser.add_argument("--closest_stars_to_check", dest="closest_stars_to_check",  default=_def_closest_stars_to_check,  type=float,    help="Number of stars closest to every tested reference pair of stars on tile and ref map to test matches for. Default: %(default)s")
     parser.add_argument("--stop_after_miss_stars",  dest="stop_after_miss_stars",   default=_def_stop_after_miss_stars,   type=float,    help="Stop after these many stars from the tile are not found on the reference map. Default: %(default)s")
     parser.add_argument("--plot_results",           dest="plot_results",            default=_def_plot_results,            type=int,      help="From the best results plot these many. Default: %(default)s")
