@@ -6,6 +6,8 @@ import time
 import types
 import random
 import sample_maps
+import pickle
+import hashlib
 
 _def_closest_stars_to_check = 3
 _def_max_dist_diff = 50
@@ -55,6 +57,30 @@ DONE
 
 
 '''
+
+def generate_md5_hash(input_string):
+    """
+    Generates the MD5 hash of a given string.
+
+    Args:
+        input_string (str): The string to be hashed.
+
+    Returns:
+        str: The 32-character hexadecimal MD5 hash.
+    """
+    # MD5 requires byte-like objects, so encode the string
+    encoded_string = input_string.encode('utf-8')
+
+    # Create an MD5 hash object
+    md5_hash = hashlib.md5()
+
+    # Update the hash object with the encoded string
+    md5_hash.update(encoded_string)
+
+    # Get the hexadecimal representation of the hash
+    hex_digest = md5_hash.hexdigest()
+
+    return hex_digest
 
 def init_logger(name: str, log_file: str, file_level=logging.INFO, console_level=logging.DEBUG):
     global _log
@@ -199,7 +225,7 @@ class Score:
 
 class StarMap:
 
-    def __init__(self, stars, exp_tile_count = None, from_picture = False):
+    def __init__(self, stars, exp_tile_count = None, from_picture = False, source_picture = None):
         if not from_picture:
             self._stars = stars
             self.from_pic_y_correction = None
@@ -218,6 +244,7 @@ class StarMap:
         self._max_size = None
         self._stars_by_distance = None
         self._exp_tile_count = exp_tile_count
+        self._source_picture = source_picture
         assert self._exp_tile_count is None or \
             (type(self._exp_tile_count) in (list, tuple) and \
              len(self._exp_tile_count) == 2 and \
@@ -256,6 +283,25 @@ class StarMap:
     def _build_map(self):
         '''Calculates distances and angles between each star
         '''
+        if self._source_picture is not None:
+            source_hash = generate_md5_hash(self._source_picture)
+            pickle_file = f"star_map.{source_hash}.pkl"
+
+            if os.path.exists(pickle_file):
+                _log.info("Pickle file found for %s"%(self._source_picture,))
+                _log.info("  \\--> %s"%(pickle_file,))
+
+                with open(pickle_file, "rb") as fh:
+                    package = pickle.load(fh)
+                self._star_distances = package.star_distances
+                self._star_angles = package.star_angles
+                self._stars_by_distance = package.stars_by_distance
+                self._max_distance = package.max_distance
+                self._max_size = package.max_size
+                return
+            
+            _log.info("Pickle file not found, calculating map from scratch!")
+        
         # fill empty distances list. Use lists instead of dict, may help with performance?
         _log.info("Building a map for %i stars"%(len(self._stars),))
 
@@ -335,6 +381,19 @@ class StarMap:
             dists = sorted(dists, key=lambda x: x[0])
             self._stars_by_distance.append([d[1] for d in dists])
             _log.debug(f" Star @ idx {i}'s closest stars (cropped to 10 stars): %s"%(", ".join("%i"%i for i in self._stars_by_distance[i][:10])))
+
+        if self._source_picture is not None:
+            package = types.SimpleNamespace()
+            package.star_distances = self._star_distances
+            package.star_angles = self._star_angles
+            package.stars_by_distance = self._stars_by_distance
+            package.max_distance = self._max_distance
+            package.max_size = self._max_size
+
+            _log.info("Saving map to pickle: %s"%(pickle_file,))
+
+            with open(pickle_file, "wb") as fh:
+                pickle.dump(package, fh)
 
     def match_tile(self, tile,
                           max_size_diff = _def_max_size_diff,

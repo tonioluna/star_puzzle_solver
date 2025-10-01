@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+# Pickle files and pictures!
+*.pkl
+*.jpg
+
 # Distribution / packaging
 .Python
 build/
