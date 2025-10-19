@@ -19,7 +19,8 @@ def _fmt_time(t):
 class Perf_Recorder:
     def __init__(self):
         self._events = []
-        self._segments = {}
+        self._segment_durations = {}
+        self._segment_hits = {}
         self._start_time = time.time()
 
     def record_checkpoint(self, id):
@@ -40,9 +41,11 @@ class Perf_Recorder:
         self._events.append(e)
     
     def record_segment_accumulated_duration(self, segment_id, duration):
-        if segment_id not in self._segments:
-            self._segments[segment_id] = 0
-        self._segments[segment_id] += duration
+        if segment_id not in self._segment_durations:
+            self._segment_durations[segment_id] = 0
+            self._segment_hits[segment_id] = 0
+        self._segment_durations[segment_id] += duration
+        self._segment_hits[segment_id] += 1
 
     def dump(self):
         _log.info("Table of checkpoints")
@@ -52,18 +55,18 @@ class Perf_Recorder:
         for e in self._events:
             _log.info(e.str)
         _log.info("-"*80)
-        if len(self._segments) > 0:
+        if len(self._segment_durations) > 0:
             _log.info("")
             _log.info("Accumulated segment durations")
             _log.info("-"*80)
-            _log.info(f" {'time':12}  {'%':>7}  {'segment'}")
+            _log.info(f" {'time':12}  {'%':>7}  {'Hits':>16}  {'segment'}")
             _log.info("-"*80)
-            total_duration = sum(self._segments.values())
-            segment_durations = list(set(self._segments.values()))
+            total_duration = sum(self._segment_durations.values())
+            segment_durations = list(set(self._segment_durations.values()))
             segment_durations.sort(reverse=True)
             for seg_d in segment_durations:
-                for s, d in self._segments.items():
+                for s, d in self._segment_durations.items():
                     if seg_d == d:
-                        _log.info(f" {_fmt_time(d):>12}  {100*d/total_duration:>6.1f}%  {s}")
+                        _log.info(f" {_fmt_time(d):>12}  {100*d/total_duration:>6.1f}%  {self._segment_hits[s]:>16_}  {s}")
             _log.info("-"*80)
         

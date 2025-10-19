@@ -14,7 +14,7 @@ pr = _pr.get_perf_recorder()
 
 _acc_debug = "ACCUMULATED_DURATION_DBG" in os.environ
 if not _acc_debug:
-    print("WARN: Accumulated duration debug is NOT enabled as ACCUMULATED_DURATION_DBG envvar is missing")
+    print("WARN: Accumulated duration debug is NOT enabled as ACCUMULATED_DURATION_DBG envvar is missing\n"*20)
 else:
     print("INFO: Accumulated duration debug is enabled as ACCUMULATED_DURATION_DBG envvar is present")
 
