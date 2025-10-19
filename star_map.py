@@ -636,13 +636,18 @@ class StarMap:
                                 if size_err > max_size_diff:
                                     _log.debug(f"          |   \\--> Size error above limit, score = 0")
                                     templ_test_stars_scores[templ_test_star] = 0
+                                    if _acc_debug:
+                                        t5d = time.time()
+                                        pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2.C_0", t5d - t5c)
+
                                     continue
-                                templ_test_stars_scores[templ_test_star] -= size_err
 
                                 if _acc_debug:
                                     t5d = time.time()
-                                    pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2.C", t5d - t5c)
-                                
+                                    pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2.C_1", t5d - t5c)
+
+                                templ_test_stars_scores[templ_test_star] -= size_err
+
                                 angle_err = angle_abs_diff(templ_test_star_angle, tile_test_star_adj_angle)
                                 angle_dist_err = angle_err * templ_test_star_dist * angle_dist_K / tile_max_star_dist_adj
                                 _log.debug(f"          |   |--> Angle distance error: {angle_dist_err:.2f}%%")
@@ -651,13 +656,16 @@ class StarMap:
                                 if angle_dist_err > max_angle_dist_diff:
                                     _log.debug(f"          |   \\--> Angle distance error above limit, score = 0")
                                     templ_test_stars_scores[templ_test_star] = 0
+                                    if _acc_debug:
+                                        t5e = time.time()
+                                        pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2.D_0", t5e - t5d)
                                     continue
                                 templ_test_stars_scores[templ_test_star] -= angle_dist_err
                                 _log.debug(f"          |   \\--> Final star score: {templ_test_stars_scores[templ_test_star]:.2f}")
 
                                 if _acc_debug:
                                     t5e = time.time()
-                                    pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2.D", t5e - t5d)
+                                    pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2.D_1", t5e - t5d)
                                 
                             
                             if _acc_debug:
