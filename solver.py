@@ -10,6 +10,9 @@ import numpy as np
 
 import star_map
 import star_finder
+import perf_recorder as _pr
+
+pr = _pr.get_perf_recorder()
 
 #import numpy as np
 #from scipy.spatial.distance import cdist
@@ -79,6 +82,9 @@ def match_images(reference_image,
                  exp_tile_count = None,
                  exp_scale_factor = None,
                  angle_rotation_ranges = None):
+    
+    pr.record_checkpoint("match_images() start")
+
     A = star_finder.find_stars(reference_image,
                            show_images=show_images)
     B = star_finder.find_stars(tile_image,
@@ -88,12 +94,16 @@ def match_images(reference_image,
     _log.info("Ref image has %i stars"%(len(A),))
     _log.info("Tile image has %i stars"%(len(B),))
 
+    pr.record_checkpoint("match_images() building start map for reference pic")
     ref_map = star_map.StarMap(A, from_picture = True,
                                exp_tile_count = exp_tile_count,
                                source_picture = os.path.abspath(reference_image))
+    
+    pr.record_checkpoint("match_images() building start map for tile")
     tile_map = star_map.StarMap(B, from_picture = True,
                                 source_picture = os.path.abspath(tile_image))
 
+    pr.record_checkpoint("match_images() matching tile")
     scores = ref_map.match_tile(tile_map,
                                 exp_scale_factor = exp_scale_factor,
                                 angle_rotation_ranges = angle_rotation_ranges,
@@ -142,15 +152,20 @@ def main():
                     file_level=logging.DEBUG, 
                     console_level=logging.INFO)
     star_finder._log = _log
+    _pr._log = _log
+    
     _log.info("Logger name: %s"%(args.logfile,))
 
-
-    match_images(args.reference_image, 
-                 args.tile_image,
-                 show_images=args.show_debug_images,
-                 exp_tile_count = args.exp_ref_tile_count,
-                 exp_scale_factor = args.exp_tile_scale_factor,
-                 angle_rotation_ranges = args.rot_90deg_range)
+    try:
+        pr.record_checkpoint('match_images() call')
+        match_images(args.reference_image, 
+                        args.tile_image,
+                        show_images=args.show_debug_images,
+                        exp_tile_count = args.exp_ref_tile_count,
+                        exp_scale_factor = args.exp_tile_scale_factor,
+                        angle_rotation_ranges = args.rot_90deg_range)
+    finally:
+        pr.dump()
     #match_images("reference_0.jpg", "fake_tile_1.jpg", show_images=True)
     input("Hit ENTER to exit!")
 

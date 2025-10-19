@@ -8,7 +8,9 @@ import time
 from matplotlib import pyplot as plt
 import numpy as np
 
-import star_map
+import perf_recorder as _pr
+pr = _pr.get_perf_recorder()
+
 
 import numpy as np
 from scipy.spatial.distance import cdist
@@ -78,14 +80,16 @@ def scan_stars(image_path,
                min_circle_radius = 4,
                max_circle_radius = 20,
                ):
+    pr.record_checkpoint("scan_stars() starts")
 
-    _log.info("Loading image...")
+    pr.record_checkpoint("scan_stars() loading images")
+    #_log.info("Loading image...")
     image = cv2.imread(image_path)
-    _log.info("  \\--> Done!")
+    #_log.info("  \\--> Done!")
     
-    _log.info("Loading image...")
+    #_log.info("Loading image...")
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _log.info("  \\--> Done!")
+    #_log.info("  \\--> Done!")
     
     gray_filtered = gray.copy()
     if gray_filter_threshold is not None:
@@ -108,7 +112,7 @@ def scan_stars(image_path,
     )
     _log.info("  \\--> Done!")
 
-    _log.info("Finding circles...")
+    pr.record_checkpoint("scan_stars() finding circles")
     #circles = cv2.HoughCircles(blurred, cv2.HOUGH_GRADIENT, 1, 5, param1=10, param2=25, minRadius=2, maxRadius=20)
     circles = cv2.HoughCircles(image = thresh, 
                                method = cv2.HOUGH_GRADIENT, 
@@ -124,12 +128,12 @@ def scan_stars(image_path,
     if circles is None:
         raise Exception("Did not find any circle!")
 
-    _log.info("Filtering empty circles...")
-
+    pr.record_checkpoint("scan_stars() removing empty circles")
+    
     good_circles = []
     bad_circles = []
 
-    for (x, y, r) in circles:
+    for idx, (x, y, r) in enumerate(circles):
         # circles under certain size are assumed to be always correct, shouldn't be false detections
         if r <= bad_circle_filter_no_check:
             good_circles.append((x,y,r))
@@ -145,6 +149,14 @@ def scan_stars(image_path,
             good_circles.append((x,y,r))
         else:
             bad_circles.append((x,y,r))
+
+        if idx & 0xFF == 0:
+            print("  %i/%i (%.2f %%) - %.2f %% good circles"
+                  ""%(idx, 
+                      len(circles), 
+                      100*idx/len(circles),
+                      100*len(good_circles) / (len(good_circles) + len(bad_circles))), 
+                      end="\r", flush=True)
     
     # Make star map
 
@@ -207,4 +219,7 @@ def scan_stars(image_path,
         # Show the plot with both images
         plt.show(block = False)
     
+    pr.record_checkpoint("scan_stars() done")
+    
+
     return good_circles

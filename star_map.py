@@ -9,6 +9,15 @@ import sample_maps
 import pickle
 import hashlib
 
+import perf_recorder as _pr
+pr = _pr.get_perf_recorder()
+
+_acc_debug = "ACCUMULATED_DURATION_DBG" in os.environ
+if not _acc_debug:
+    print("WARN: Accumulated duration debug is NOT enabled as ACCUMULATED_DURATION_DBG envvar is missing")
+else:
+    print("INFO: Accumulated duration debug is enabled as ACCUMULATED_DURATION_DBG envvar is present")
+
 _def_closest_stars_to_check = 3
 _def_max_dist_diff = 50
 _def_max_size_diff = 50
@@ -283,25 +292,34 @@ class StarMap:
     def _build_map(self):
         '''Calculates distances and angles between each star
         '''
+        pr.record_checkpoint("StarMap.build() start")
         if self._source_picture is not None:
             source_hash = generate_md5_hash(self._source_picture)
             pickle_file = f"star_map.{source_hash}.pkl"
 
             if os.path.exists(pickle_file):
+                pr.record_checkpoint("StarMap.build(), loading pickle start")
                 _log.info("Pickle file found for %s"%(self._source_picture,))
-                _log.info("  \\--> %s"%(pickle_file,))
+                _log.info("  |--> Size: %.3f MiB"%(os.stat(pickle_file).st_size/(1024**2),))
+                _log.info("  \\--> File: %s"%(pickle_file,))
 
+                print("Loading pickle...", end="", flush=True)
                 with open(pickle_file, "rb") as fh:
                     package = pickle.load(fh)
+                print("\rPickle has been loaded", end="\r", flush=True)
                 self._star_distances = package.star_distances
                 self._star_angles = package.star_angles
                 self._stars_by_distance = package.stars_by_distance
                 self._max_distance = package.max_distance
                 self._max_size = package.max_size
+                
+                pr.record_checkpoint("StarMap.build() completed")
                 return
             
             _log.info("Pickle file not found, calculating map from scratch!")
         
+        pr.record_checkpoint("StarMap.build(), calculating map")
+
         # fill empty distances list. Use lists instead of dict, may help with performance?
         _log.info("Building a map for %i stars"%(len(self._stars),))
 
@@ -338,6 +356,15 @@ class StarMap:
             self._star_angles.append([None]*len(self._stars))
         # Calcualte distances.
         for i in range(len(self._stars)):
+
+            if i & 0xFF == 0:
+                print("  %i/%i (%.2f %%)"
+                    ""%(i, 
+                        len(self._stars), 
+                        100*i/len(self._stars)), 
+                        end="\r", flush=True)
+
+
             for j in range(i, len(self._stars)):
                 # skip distance to itself
                 if i == j: 
@@ -392,8 +419,11 @@ class StarMap:
 
             _log.info("Saving map to pickle: %s"%(pickle_file,))
 
+            pr.record_checkpoint("StarMap.build(), saving pickle")
             with open(pickle_file, "wb") as fh:
                 pickle.dump(package, fh)
+        
+        pr.record_checkpoint("StarMap.build() completed")
 
     def match_tile(self, tile,
                           max_size_diff = _def_max_size_diff,
@@ -409,11 +439,17 @@ class StarMap:
                           angle_rotation_ranges = None,
                           ):
         _log.info("Matching stars...")
+        next_checkpoint = 1
+
         # This algoritm will test each star on the reference map against each start on the tile map
         scores = []
         best_score = 0
         for templ_refA_star in range(len(self._stars)):
-            print("%.3f %% - Best score: %.2f out of %i checks"%(100*templ_refA_star / len(self._stars), best_score, len(scores)), end="\r", flush=True)
+            progress = 100*templ_refA_star / len(self._stars)
+            if progress > next_checkpoint:
+                pr.record_checkpoint("Match at %.2f%%"%(progress,))
+                next_checkpoint = int(progress) + 1
+            print("%.3f %% - Best score: %.2f out of %i checks"%(progress, best_score, len(scores)), end="\r", flush=True)
 
             for tile_refA_star in range(len(tile._stars)):
                 
@@ -427,13 +463,20 @@ class StarMap:
                     for tile_refB_star in tile_refB_stars:
                         # Check if this combination has been evaluated already
                         # Re-enable once results make sense! Seeing different scaling factors when the same tile is matched different times out of different start stars
-                        if any([score.match_candidate_stars(templ_refA_star, templ_refB_star, tile_refA_star, tile_refB_star) for score in scores]):
-                            _log.debug(f"Combination already verified: templ_refA_star={templ_refA_star}, templ_refB_star={templ_refB_star}, tile_refA_star={tile_refA_star}, tile_refB_star={tile_refB_star}")
-                            continue
+                        #if any([score.match_candidate_stars(templ_refA_star, templ_refB_star, tile_refA_star, tile_refB_star) for score in scores]):
+                        #    _log.debug(f"Combination already verified: templ_refA_star={templ_refA_star}, templ_refB_star={templ_refB_star}, tile_refA_star={tile_refA_star}, tile_refB_star={tile_refB_star}")
+                        #    continue
+
+                        if _acc_debug:
+                            t0 = time.time()
 
                         # Calculate size/dist adjustment factor based on the refA-refB distances
                         templ_map_refAB_dist = self._star_distances[templ_refA_star][templ_refB_star]
                         tile_map_refAB_dist = tile._star_distances[tile_refA_star][tile_refB_star]
+
+                        if _acc_debug:
+                            t1 = time.time()
+                            pr.record_segment_accumulated_duration("match_tile.star_distances_access", t1 - t0)
 
                         tile_scale_factor = templ_map_refAB_dist / tile_map_refAB_dist
 
@@ -443,6 +486,18 @@ class StarMap:
                             # should we save an score?
                             continue
 
+                        # Check if this combination has been evaluated already
+                        # Re-enable once results make sense! Seeing different scaling factors when the same tile is matched different times out of different start stars
+                        if any([score.match_candidate_stars(templ_refA_star, templ_refB_star, tile_refA_star, tile_refB_star) for score in scores]):
+                            _log.debug(f"Combination already verified: templ_refA_star={templ_refA_star}, templ_refB_star={templ_refB_star}, tile_refA_star={tile_refA_star}, tile_refB_star={tile_refB_star}")
+                            if _acc_debug:
+                                t2 = time.time()
+                                pr.record_segment_accumulated_duration("match_tile.match_candidate_stars->match", t2 - t1)
+                            continue
+                        if _acc_debug:
+                            t2 = time.time()
+                            pr.record_segment_accumulated_duration("match_tile.match_candidate_stars->no match", t2 - t1)
+                        
                         tile_max_star_dist_adj = tile._max_distance * tile_scale_factor
                         tile_max_star_size_adj = tile._max_size * tile_scale_factor
 
@@ -462,6 +517,10 @@ class StarMap:
                             not any([adj_angle > r[0] and adj_angle < r[1] for r in angle_rotation_ranges]):
                             continue
                         
+                        if _acc_debug:
+                            t3 = time.time()
+                            pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_0", t3 - t2)
+
                         score = Score(templ_refA_star, 
                                       templ_refB_star, 
                                       tile_refA_star, 
@@ -506,6 +565,9 @@ class StarMap:
                             if tile_test_star in (tile_refA_star, tile_refB_star):
                                 continue
 
+                            if _acc_debug:
+                                t4 = time.time()
+
                             # get adjusted distance and angle to refA and then see if a matching star exists on ref map
                             tile_test_star_adj_dist = tile._star_distances[tile_refA_star][tile_test_star] * tile_scale_factor
                             tile_test_star_adj_angle = _adj_angle(tile._star_angles[tile_refA_star][tile_test_star] + adj_angle)
@@ -516,6 +578,10 @@ class StarMap:
                             _log.debug(f"          |--> adjusted distance to tile A star: {tile_test_star_adj_dist}")
                             _log.debug(f"          |--> adjusted size: {tile_test_star_adj_size}")
                             _log.debug(f"          |--> adjusted angle to tile A star: {tile_test_star_adj_angle}")
+
+                            if _acc_debug:
+                                t5 = time.time()
+                                pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_1", t5 - t4)
 
                             # Will test ref map stars by distance from refA star
                             # Don't expect there to be too many stars, tiles should have a handful stars usually
@@ -532,8 +598,16 @@ class StarMap:
                                 # I guess some random maps may put stars very very close to each other?
                                 if templ_test_star_dist < 0.1:
                                     continue
+
+                                if _acc_debug:
+                                    t5a = time.time()
+                            
                                 templ_test_star_size = self._stars[templ_test_star][STAR_SZ]
                                 templ_test_star_angle = self._star_angles[templ_refA_star][templ_test_star]
+
+                                if _acc_debug:
+                                    t5b = time.time()
+                                    pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2.A", t5b - t5a)
 
                                 templ_test_stars_scores[templ_test_star] = 100
 
@@ -543,6 +617,10 @@ class StarMap:
                                 dist_err = abs(templ_test_star_dist - tile_test_star_adj_dist) * 100 / tile_max_star_dist_adj
                                 _log.debug(f"          |   |--> Distance error: {dist_err:.2f}%%")
                                 
+                                if _acc_debug:
+                                    t5c = time.time()
+                                    pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2.B", t5c - t5b)
+
                                 if dist_err > max_dist_diff:
                                     _log.debug(f"          |   \\--> Distance error above limit, score = 0")
                                     templ_test_stars_scores[templ_test_star] = 0
@@ -560,6 +638,10 @@ class StarMap:
                                     templ_test_stars_scores[templ_test_star] = 0
                                     continue
                                 templ_test_stars_scores[templ_test_star] -= size_err
+
+                                if _acc_debug:
+                                    t5d = time.time()
+                                    pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2.C", t5d - t5c)
                                 
                                 angle_err = angle_abs_diff(templ_test_star_angle, tile_test_star_adj_angle)
                                 angle_dist_err = angle_err * templ_test_star_dist * angle_dist_K / tile_max_star_dist_adj
@@ -572,6 +654,15 @@ class StarMap:
                                     continue
                                 templ_test_stars_scores[templ_test_star] -= angle_dist_err
                                 _log.debug(f"          |   \\--> Final star score: {templ_test_stars_scores[templ_test_star]:.2f}")
+
+                                if _acc_debug:
+                                    t5e = time.time()
+                                    pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2.D", t5e - t5d)
+                                
+                            
+                            if _acc_debug:
+                                t6 = time.time()
+                                pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2", t6 - t5)
 
                             # Register the highest score
                             tile_test_star_score = 0
@@ -696,6 +787,7 @@ def main():
                     log_file = args.logfile,
                     file_level=logging.DEBUG, 
                     console_level=logging.INFO)
+    _pr._log = _log
     _log.info("Logger name: %s"%(args.logfile,))
 
     _log.warning(pending_improvements)
