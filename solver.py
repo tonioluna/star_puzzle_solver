@@ -140,6 +140,7 @@ def main():
     parser.add_argument("--exp_tile_scale_factor",  dest="exp_tile_scale_factor",   default=None, type=star_map.arg_scale_factor,    help="Expected scale factor range for the provided tile. Default: %(default)s%%")
     parser.add_argument("--rot_90deg_range",        dest="rot_90deg_range",         default=None, type=star_map.arg_rot_90deg_range, help="Limit the max deviation from 90 degrees the tile can have. Default: %(default)s")
     parser.add_argument("--show_debug_images",      dest="show_debug_images",       default=None, action = "store_true",             help="Show debug images generated when finding starts on the input pictures")
+    parser.add_argument("--debug",                  dest="debug",                   default=None, action = "store_true",             help="Save debug messages into the file logger")
     args =  parser.parse_args()
 
     if args.logfile is None:
@@ -149,21 +150,25 @@ def main():
         args.logfile = os.path.join(logs_dir, os.path.splitext(os.path.basename(sys.argv[0]))[0] + time.strftime("%y%m%d_%H%M%S") + ".log")
     _log = star_map.init_logger(name = sys.argv[0], 
                     log_file = args.logfile,
-                    file_level=logging.DEBUG, 
+                    file_level=logging.DEBUG if args.debug else logging.INFO, 
                     console_level=logging.INFO)
     star_finder._log = _log
     _pr._log = _log
     
     _log.info("Logger name: %s"%(args.logfile,))
+    _log.info("Command Line: %s %s"%(sys.executable, " ".join([a if " " not in a else repr(a) for a in sys.argv]),))
 
     try:
         pr.record_checkpoint('match_images() call')
+        t0 = time.time()
         match_images(args.reference_image, 
                         args.tile_image,
                         show_images=args.show_debug_images,
                         exp_tile_count = args.exp_ref_tile_count,
                         exp_scale_factor = args.exp_tile_scale_factor,
                         angle_rotation_ranges = args.rot_90deg_range)
+        t1 = time.time()
+        _log.info("Match images took %s"%(_pr._fmt_time(t1 - t0),))
     finally:
         pr.dump()
     #match_images("reference_0.jpg", "fake_tile_1.jpg", show_images=True)

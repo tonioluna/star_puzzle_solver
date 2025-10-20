@@ -87,9 +87,9 @@ def scan_stars(image_path,
     image = cv2.imread(image_path)
     #_log.info("  \\--> Done!")
     
-    #_log.info("Loading image...")
+    _log.info("Color to gray...")
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    #_log.info("  \\--> Done!")
+    _log.info("  \\--> Done!")
     
     gray_filtered = gray.copy()
     if gray_filter_threshold is not None:
@@ -112,6 +112,7 @@ def scan_stars(image_path,
     )
     _log.info("  \\--> Done!")
 
+    _log.info("  \\--> Finding circles!")
     pr.record_checkpoint("scan_stars() finding circles")
     #circles = cv2.HoughCircles(blurred, cv2.HOUGH_GRADIENT, 1, 5, param1=10, param2=25, minRadius=2, maxRadius=20)
     circles = cv2.HoughCircles(image = thresh, 
