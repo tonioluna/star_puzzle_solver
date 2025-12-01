@@ -2,32 +2,49 @@
 set ACCUMULATED_DURATION_DBG=1
 
 # All these find the same matches!
-C:\Python313\python.exe solver.py --ref reference_0.jpg --tile tile_0.jpg --exp_ref_tile_count 4,6 --exp_tile_scale_factor 0.66,0.74 --rot_90deg_range 5.0
-C:\Python313\python.exe solver.py --ref reference_0.jpg --tile tile_0.jpg --exp_ref_tile_count 8,12 --exp_tile_scale_factor 0.66,0.74 --rot_90deg_range 5.0
-C:\Python313\python.exe solver.py --ref reference_0.jpg --tile tile_0.jpg --exp_ref_tile_count 12,18 --exp_tile_scale_factor 0.66,0.74 --rot_90deg_range 5.0
+C:\Python313\python.exe solver.py --ref reference_0.jpg --tile images\tile_0.jpg --exp_ref_tile_count 4,6 --exp_tile_scale_factor 0.66,0.74 --rot_90deg_range 5.0
+C:\Python313\python.exe solver.py --ref reference_0.jpg --tile images\tile_0.jpg --exp_ref_tile_count 8,12 --exp_tile_scale_factor 0.66,0.74 --rot_90deg_range 5.0
+C:\Python313\python.exe solver.py --ref reference_0.jpg --tile images\tile_0.jpg --exp_ref_tile_count 12,18 --exp_tile_scale_factor 0.66,0.74 --rot_90deg_range 5.0
 
-C:\Python313\python.exe solver.py --ref ref\full_blur.jpg --tile tile_0.jpg --exp_ref_tile_count 36,28 --rot_90deg_range 2.0
+C:\Python313\python.exe solver.py --ref images\full_blur.jpg --tile images\tile_0.jpg --exp_ref_tile_count 36,28 --rot_90deg_range 2.0
 
 
-# ~2 min to run, Best score is 87
+# ~2 min to run, Best score is 87.58
 # HOWEVER, the right solution is not the best score by a good amount
 # Finds other solutions with better scores but those have lots of unmatched stars on the ref map
-C:\Python313\python.exe solver.py --ref ref\full_blur.empty_1_rot_270.jpg --tile tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0
+C:\Python313\python.exe solver.py --ref images\full_blur.empty_1_rot_270.jpg --tile images\tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0
 
 # ~1.3 min to run, Best score is 78.45 :(
-C:\Python313\python.exe solver.py --ref ref\full_blur.empty_1.jpg --tile tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0
+C:\Python313\python.exe solver.py --ref images\full_blur.empty_1.jpg --tile images\tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0
 
 # ~1 min to run, Best score is 78.45 :(
-C:\Python313\python.exe solver.py --ref ref\full_blur.empty_1.jpg --tile tile_0.jpg --exp_ref_tile_count 36,28 --rot_90deg_range 2.0
+C:\Python313\python.exe solver.py --ref images\full_blur.empty_1.jpg --tile images\tile_0.jpg --exp_ref_tile_count 36,28 --rot_90deg_range 2.0
 
 # ~1 min to run, Best score is 78.45 :(
-C:\Python313\python.exe solver.py --ref ref\full_blur.empty_1.jpg --tile tile_0.jpg --exp_ref_tile_count 72,56 --rot_90deg_range 2.0
+C:\Python313\python.exe solver.py --ref images\full_blur.empty_1.jpg --tile images\tile_0.jpg --exp_ref_tile_count 72,56 --rot_90deg_range 2.0
 
 # Con las estrellas del nucleo. Llegó al 12% de avance en ~1 hora.
-C:\Python313\python.exe solver.py --ref ref\full_blur.jpg --tile tile_0.jpg --exp_ref_tile_count 36,28 --rot_90deg_range 2.0
+C:\Python313\python.exe solver.py --ref images\full_blur.jpg --tile images\tile_0.jpg --exp_ref_tile_count 36,28 --rot_90deg_range 2.0
 
+# These get different scores, there's something broken here, should be getting something quite similar!
+C:\Python313\python.exe solver.py --ref images\crop_B\full_blur.empty_1_rot_0.crop_B.jpg   --tile images\tile_0.jpg --rot_90deg_range 15.0
+C:\Python313\python.exe solver.py --ref images\crop_B\full_blur.empty_1_rot_90.crop_B.jpg  --tile images\tile_0.jpg --rot_90deg_range 15.0
+C:\Python313\python.exe solver.py --ref images\crop_B\full_blur.empty_1_rot_180.crop_B.jpg --tile images\tile_0.jpg --rot_90deg_range 15.0
+C:\Python313\python.exe solver.py --ref images\crop_B\full_blur.empty_1_rot_270.crop_B.jpg --tile images\tile_0.jpg --rot_90deg_range 15.0
 
 # Next:
-1. Figure out why the rotated version of the image worked but not the original!
-2. Have the check find unmatched stars on the ref template and have those affect the score! TBD how to grade those.
-   This may not be required after fixing #1
+#1. Figure out why the rotated version of the image worked but not the original!
+#2. Have the check find unmatched stars on the ref template and have those affect the score! TBD how to grade those.
+#   This may not be required after fixing #1
+#DONE. Figured out why scores were failing. We were overluing unsigned integers into the negative space and producing bad angles
+
+# Best score ~86
+C:\Python313\python.exe solver.py --ref images\full_blur.empty_1_rot_270.jpg --tile images\tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0
+
+# Best score ?
+C:\Python313\python.exe solver.py --ref images\full_blur.empty_1_rot_270.jpg --tile images\tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0
+
+Next:
+> Add an algorithm that discriminates unmatched stars
+> NEVERMIND. Found a simple case which can't find the solution. Debug it, it is a small map!
+C:\Python313\python.exe solver.py --ref images\crop_B\full_blur.empty_1_rot_270.crop_B.jpg --tile images\tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0 --plot_input --force_scan_ref --force_scan_tile --solution_debug --draw_matches 3 --debug

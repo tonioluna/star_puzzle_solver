@@ -12,6 +12,7 @@ import hashlib
 import perf_recorder as _pr
 pr = _pr.get_perf_recorder()
 
+DBG = True
 DBG = False
 
 _acc_debug = "ACCUMULATED_DURATION_DBG" in os.environ
@@ -202,15 +203,15 @@ class Score:
     def print_summary(self, show_hdr, score_bar_point_size = None, list_matches = False):
         if show_hdr:
             _log.info("")
-            _log.info(r"ID    rank  refA_stars  refB_stars   Size    Adj")
-            _log.info( "ID     ing  Ref   Tile  Ref   Tile   Factor  Angle   Score")
-            _log.info( "---------------------------------------------------------------")
+            _log.info(r"ID      rank  refA_stars  refB_stars   Size    Adj")
+            _log.info( "ID       ing  Ref   Tile  Ref   Tile   Factor  Angle   Score")
+            _log.info( "-----------------------------------------------------------------")
         if score_bar_point_size is not None:
             score_bar = int(self.score * score_bar_point_size) * "*"
         else:
             score_bar = ""
 
-        _log.info(f"{self.ID:<5}  "
+        _log.info(f"{self.ID:<7}  "
                   f"{self.ranking if self.ranking is not None else "N/A":<4}  "
                   f"{self.templ_refA_star:<5} "
                   f"{self.tile_refA_star:<5} "
@@ -264,6 +265,14 @@ class StarMap:
              type(self._exp_tile_count[1]) is int), "exp_tile_count should be None or list/tuple of two int. Got %s"%(repr(self._exp_tile_count))
         self._build_map()
 
+    def dump_map(self, var_name):
+        map = []
+        map.append("%s = ("%(var_name,))
+        for i, (x, y, s) in enumerate(self._stars):
+            map.append("  (%-7s, %-7s, %-7s), # Star %i"%(x, y, s, i))
+        map.append(")")
+        _log.info("# Map dump\n%s"%("\n".join(map)))
+
     def adjust_to_angle_and_size(self, adj_angle, size_adj_factor):
         score = types.SimpleNamespace()
         score.adj_angle = adj_angle
@@ -298,7 +307,12 @@ class StarMap:
         pr.record_checkpoint("StarMap.build() start")
         if self._source_picture is not None:
             source_hash = generate_md5_hash(self._source_picture)
-            pickle_file = f"star_map.{source_hash}.pkl"
+            
+            pickle_dir = "pickle.star_maps"
+            if not os.path.exists(pickle_dir):
+                os.mkdir(pickle_dir)
+
+            pickle_file = os.path.abspath(os.path.join(pickle_dir, f"star_map.{source_hash}.pkl"))
 
             if os.path.exists(pickle_file):
                 pr.record_checkpoint("StarMap.build(), loading pickle start")
@@ -320,6 +334,7 @@ class StarMap:
                 return
             
             _log.info("Pickle file not found, calculating map from scratch!")
+            _log.info("  \\--> %s"%(repr(pickle_file)))
         
         pr.record_checkpoint("StarMap.build(), calculating map")
 
@@ -521,9 +536,14 @@ class StarMap:
                         refB_size_error = (100 * abs(tile_refB_adj_size - templ_refB_size) / templ_refB_size)
 
                         adj_angle = _adj_angle(self._star_angles[templ_refA_star][templ_refB_star] - tile._star_angles[tile_refA_star][tile_refB_star])
+                        if DBG:
+                            _log.debug("Angle from templ_refA_star to templ_refB_star: %.2f"%(self._star_angles[templ_refA_star][templ_refB_star],))
+                            _log.debug("Angle from tile_refA_star to tile_refB_star: %.2f"  %(tile._star_angles[tile_refA_star][tile_refB_star],))
+                            _log.debug("Un-adjusted angle: : %.2f"  %(self._star_angles[templ_refA_star][templ_refB_star] - tile._star_angles[tile_refA_star][tile_refB_star],))
 
                         if angle_rotation_ranges is not None and \
                             not any([adj_angle > r[0] and adj_angle < r[1] for r in angle_rotation_ranges]):
+                            if DBG: _log.debug("Angles out of range, skipping!")
                             continue
                         
                         if _acc_debug:

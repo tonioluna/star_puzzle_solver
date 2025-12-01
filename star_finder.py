@@ -34,6 +34,11 @@ def find_stars(image_path,
     if show_images:
         force_scan = True
 
+    #pickle_dir = os.path.join(os.path.dirname(image_path), "pickle.stars")
+    pickle_dir = "pickle.stars"
+    if not os.path.exists(pickle_dir):
+        os.mkdir(pickle_dir)
+
     pickle_name = f"{os.path.basename(image_path)}."  \
                   f"gft_{gray_filter_threshold}."   \
                   f"abz_{adaptive_block_size}."   \
@@ -44,6 +49,8 @@ def find_stars(image_path,
                   f"mncr_{gray_filter_threshold}."   \
                   f"mxcr_{gray_filter_threshold}.pkl"
     
+    pickle_name = os.path.abspath(os.path.join(pickle_dir, pickle_name))
+    
     _log.info("Getting stars from %s"%(image_path,))
     if os.path.exists(pickle_name) and not force_scan:
         _log.info("Pickle exists, loading: %s"%(pickle_name,))
@@ -51,6 +58,8 @@ def find_stars(image_path,
             return pickle.load(fh)
 
     _log.info("Piclke does not exist, scanning image...")
+    _log.info("  \\--> %s"%(repr(pickle_name)))
+
     stars = scan_stars(image_path = image_path, 
                        gray_filter_threshold = gray_filter_threshold,
                        adaptive_block_size = adaptive_block_size,
@@ -83,7 +92,7 @@ def scan_stars(image_path,
     pr.record_checkpoint("scan_stars() starts")
 
     pr.record_checkpoint("scan_stars() loading images")
-    #_log.info("Loading image...")
+    _log.info("Loading image %s"%(image_path, ))
     image = cv2.imread(image_path)
     #_log.info("  \\--> Done!")
     
@@ -124,6 +133,7 @@ def scan_stars(image_path,
                                minRadius=min_circle_radius, 
                                maxRadius=max_circle_radius)
     circles = np.uint16(np.around(circles))[0]
+    #circles = np.float64(np.around(circles))[0]
     _log.info("  \\--> Done!")
 
     if circles is None:
@@ -223,4 +233,4 @@ def scan_stars(image_path,
     pr.record_checkpoint("scan_stars() done")
     
 
-    return good_circles
+    return np.float64(good_circles)
