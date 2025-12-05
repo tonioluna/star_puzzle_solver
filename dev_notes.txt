@@ -42,9 +42,31 @@ C:\Python313\python.exe solver.py --ref images\crop_B\full_blur.empty_1_rot_270.
 C:\Python313\python.exe solver.py --ref images\full_blur.empty_1_rot_270.jpg --tile images\tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0
 
 # Best score ?
-C:\Python313\python.exe solver.py --ref images\full_blur.empty_1_rot_270.jpg --tile images\tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0
+C:\Python313\python.exe solver.py --ref images\full_blur.empty_1_rot_270.jpg --tile images\tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0 --draw_matches 4
 
 Next:
 > Add an algorithm that discriminates unmatched stars
-> NEVERMIND. Found a simple case which can't find the solution. Debug it, it is a small map!
-C:\Python313\python.exe solver.py --ref images\crop_B\full_blur.empty_1_rot_270.crop_B.jpg --tile images\tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0 --plot_input --force_scan_ref --force_scan_tile --solution_debug --draw_matches 3 --debug
+> SOLVED NEVERMIND. Found a simple case which can't find the solution. Debug it, it is a small map!
+C:\Python313\python.exe solver.py --ref images\crop_B\full_blur.empty_1_rot_270.crop_B.jpg --tile images\tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0 --plot_input --force_scan_ref --force_scan_tile --solution_debug --draw_matches 3 --debug --force_map_ref --force_map_tile
+It was not working properly because --exp_ref_tile_count was provided which was limiting the number of stars to test. BE CAREFUL with this option when using cropped images
+
+NExt: 
+> Add an algorithm that discriminates unmatched stars. This run find many false positives with bad scores which have lots of unmatched stars on the templ side
+C:\Python313\python.exe solver.py --ref images\full_blur.empty_1_rot_270.jpg --tile images\tile_0.jpg --exp_ref_tile_count 20,15 --rot_90deg_range 5.0  --draw_matches 8
+
+
+
+# Sooo, I tried to add code to draw the comparison, showing matched tile and templ stars drawn on top of the template image, cropped
+# it is not working well
+#   a. The image is sometimes excesively cropped
+#   b. tile stars are drawn at the wrong place
+#   c. solutions are giving garbage again!
+# So, next:
+Debug why this is not working anymore. it is a small map, can use full debug
+>C:\Python313\python.exe solver.py --ref images\crop_B\full_blur.empty_1_rot_180.crop_B.jpg   --tile_image images\tile_0.jpg --rot_90deg_range 15.0 --draw_comparisons 5 --debug --plot_input_maps --plot_solution_maps 5 --show_debug_images --tile_gray 128 --templ_gray 128 --draw_matches 5 --solution_debug
+
+Then, work on the comparison drawing
+1. Calculate the coordinates for all stars, template and tile, over the template image
+2. Crop the image based on all the drawn stars from both tiles
+3. Draw matched pairs, use diff colors for tile and templ. Join them with a line
+4. Draw un-matched tile stars on other color

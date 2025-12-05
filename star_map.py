@@ -94,6 +94,16 @@ def generate_md5_hash(input_string):
 
     return hex_digest
 
+_pickle_db = {}
+def pickle_factory(fname):
+    global _pickle_db
+    fname = os.path.realpath(fname)
+    if fname not in _pickle_db:
+        with open(fname, "rb") as fh:
+            _pickle_db[fname] = pickle.load(fh)
+    return _pickle_db[fname]
+    
+
 def init_logger(name: str, log_file: str, file_level=logging.INFO, console_level=logging.DEBUG):
     global _log
     """
@@ -182,11 +192,17 @@ class Score:
         return match
             
 
-    def finalize(self, zero_score = False):
+    def finalize(self, zero_score = False, unmatched_stars = None, unmatched_stars_weight = None):
         self._mappings = {}
         self._mappings.update(self._tile_star_matches)
         self._mappings[self.tile_refA_star] = self.templ_refA_star
         self._mappings[self.tile_refB_star] = self.templ_refB_star
+        self.unmatched_stars_weight = unmatched_stars_weight
+        self.unmatched_stars = unmatched_stars
+        if self.unmatched_stars is None:
+            self.unmatched_ratio = None
+        else:
+            self.unmatched_ratio = len(self._tile_star_matches) / (len(self._tile_star_matches) + self.unmatched_stars)
         if not zero_score:
             self.score = self._calculate_score()
         else:
@@ -197,19 +213,34 @@ class Score:
         self._tile_star_scores[star] = score
         self._tile_star_matches[star] = matched_star
 
+    def get_all_tile_to_templ_pairs(self):
+        return dict(self._mappings)
+    
+    def get_matched_templ_stars(self):
+        s = [s for s in self._tile_star_matches.values() if s is not None]
+        return list(set(s))
+
     def _calculate_score(self):
-        return sum(self._tile_star_scores.values()) / (len(self._tile_star_scores))
+        score = sum(self._tile_star_scores.values()) / (len(self._tile_star_scores))
+        if self.unmatched_ratio is None:
+            return score
+        weight_ratio = self.unmatched_stars_weight / 100
+        return (1 - weight_ratio) * score + \
+               weight_ratio * score * self.unmatched_ratio
 
     def print_summary(self, show_hdr, score_bar_point_size = None, list_matches = False):
         if show_hdr:
             _log.info("")
-            _log.info(r"ID      rank  refA_stars  refB_stars   Size    Adj")
-            _log.info( "ID       ing  Ref   Tile  Ref   Tile   Factor  Angle   Score")
+            _log.info(r"ID       rank  refA_stars  refB_stars   Size    Adj     Unmatched\\")
+            _log.info( "ID        ing  Ref   Tile  Ref   Tile   Factor  Angle   Strs Ratio Score")
             _log.info( "-----------------------------------------------------------------")
         if score_bar_point_size is not None:
             score_bar = int(self.score * score_bar_point_size) * "*"
         else:
             score_bar = ""
+
+        us = f"{self.unmatched_stars}" if self.unmatched_stars is not None else "N/A"
+        ur = f"{self.unmatched_ratio:<5.3}" if self.unmatched_ratio is not None else "N/A"
 
         _log.info(f"{self.ID:<7}  "
                   f"{self.ranking if self.ranking is not None else "N/A":<4}  "
@@ -219,6 +250,8 @@ class Score:
                   f"{self.tile_refB_star:<5}  "
                   f"{self.size_adj_factor:<6.3f}  "
                   f"{self.adj_angle:<6.2f}  "
+                  f"{us:3}  "
+                  f"{ur:5}  "
                   f"{self.score:<7.2f}  "
                   f"{score_bar}"
                   )
@@ -229,6 +262,8 @@ class Score:
             
             for ts in range(len(self._mappings)):
                 rs = self._mappings[ts]
+                if rs is None:
+                    rs = "N/A"
                 if ts in self._tile_star_scores:
                     _log.info(f"    {ts:9}  {rs:9}  {self._tile_star_scores[ts]:.2f}")
                 elif ts == self.tile_refA_star:
@@ -238,7 +273,7 @@ class Score:
 
 class StarMap:
 
-    def __init__(self, stars, exp_tile_count = None, from_picture = False, source_picture = None):
+    def __init__(self, stars, exp_tile_count = None, from_picture = False, stars_pickle = None, force_scan = False):
         if not from_picture:
             self._stars = stars
             self.from_pic_y_correction = None
@@ -251,13 +286,14 @@ class StarMap:
                 self._stars.append((x, max_y - y, s))
             self.from_pic_y_correction = max_y
 
+        self._force_scan = force_scan
         self._star_distances = None
         self._star_angles = None
         self._max_distance = None
         self._max_size = None
         self._stars_by_distance = None
         self._exp_tile_count = exp_tile_count
-        self._source_picture = source_picture
+        self._stars_pickle = stars_pickle
         assert self._exp_tile_count is None or \
             (type(self._exp_tile_count) in (list, tuple) and \
              len(self._exp_tile_count) == 2 and \
@@ -305,24 +341,23 @@ class StarMap:
         '''Calculates distances and angles between each star
         '''
         pr.record_checkpoint("StarMap.build() start")
-        if self._source_picture is not None:
-            source_hash = generate_md5_hash(self._source_picture)
-            
+        if self._stars_pickle is not None:
             pickle_dir = "pickle.star_maps"
             if not os.path.exists(pickle_dir):
                 os.mkdir(pickle_dir)
 
-            pickle_file = os.path.abspath(os.path.join(pickle_dir, f"star_map.{source_hash}.pkl"))
+            pickle_file = os.path.abspath(os.path.join(pickle_dir, f"star_map.{os.path.basename(self._stars_pickle)}"))
 
-            if os.path.exists(pickle_file):
+            if os.path.exists(pickle_file) and not self._force_scan:
                 pr.record_checkpoint("StarMap.build(), loading pickle start")
-                _log.info("Pickle file found for %s"%(self._source_picture,))
+                _log.info("Pickle file found referenced stars pickle %s"%(self._stars_pickle,))
                 _log.info("  |--> Size: %.3f MiB"%(os.stat(pickle_file).st_size/(1024**2),))
                 _log.info("  \\--> File: %s"%(pickle_file,))
 
                 print("Loading pickle...", end="", flush=True)
-                with open(pickle_file, "rb") as fh:
-                    package = pickle.load(fh)
+                package = pickle_factory(pickle_file)
+                #with open(pickle_file, "rb") as fh:
+                #    package = pickle.load(fh)
                 print("\rPickle has been loaded", end="\r", flush=True)
                 self._star_distances = package.star_distances
                 self._star_angles = package.star_angles
@@ -427,7 +462,7 @@ class StarMap:
             self._stars_by_distance.append([d[1] for d in dists])
             if DBG: _log.debug(f" Star @ idx {i}'s closest stars (cropped to 10 stars): %s"%(", ".join("%i"%i for i in self._stars_by_distance[i][:10])))
 
-        if self._source_picture is not None:
+        if self._stars_pickle is not None:
             package = types.SimpleNamespace()
             package.star_distances = self._star_distances
             package.star_angles = self._star_angles
@@ -444,19 +479,35 @@ class StarMap:
         pr.record_checkpoint("StarMap.build() completed")
 
     def match_tile(self, tile,
-                          max_size_diff = _def_max_size_diff,
-                          max_dist_diff = _def_max_dist_diff,
-                          max_angle_dist_diff = _def_max_angle_dist_diff,
-                          closest_stars_to_check = _def_closest_stars_to_check,
-                          stop_after_miss_stars = _def_stop_after_miss_stars,
-                          show_result_details = _def_plot_results,
-                          size_diff_score_factor = 0.5,
-                          dist_diff_score_factor = 1.0,
-                          angle_dist_score_factor = 1.0,
-                          exp_scale_factor = None,
-                          angle_rotation_ranges = None,
+                   max_size_diff = _def_max_size_diff,
+                   max_dist_diff = _def_max_dist_diff,
+                   max_angle_dist_diff = _def_max_angle_dist_diff,
+                   closest_stars_to_check = _def_closest_stars_to_check,
+                   stop_after_miss_stars = _def_stop_after_miss_stars,
+                   show_result_details = _def_plot_results,
+                   size_diff_score_factor = 0.5,
+                   dist_diff_score_factor = 1.0,
+                   angle_dist_score_factor = 1.0,
+                   exp_scale_factor = None,
+                   angle_rotation_ranges = None,
+                   unmatched_stars_weight = False,
+                   max_listed_results = 25,
                           ):
         _log.info("Matching stars...")
+        _log.debug("  |--> max_size_diff = %s"%(repr(max_size_diff),))
+        _log.debug("  |--> max_dist_diff = %s"%(repr(max_dist_diff),))
+        _log.debug("  |--> max_angle_dist_diff = %s"%(repr(max_angle_dist_diff),))
+        _log.debug("  |--> closest_stars_to_check = %s"%(repr(closest_stars_to_check),))
+        _log.debug("  |--> stop_after_miss_stars = %s"%(repr(stop_after_miss_stars),))
+        _log.debug("  |--> show_result_details = %s"%(repr(show_result_details),))
+        _log.debug("  |--> size_diff_score_factor = %s"%(repr(size_diff_score_factor),))
+        _log.debug("  |--> dist_diff_score_factor = %s"%(repr(dist_diff_score_factor),))
+        _log.debug("  |--> angle_dist_score_factor = %s"%(repr(angle_dist_score_factor),))
+        _log.debug("  |--> exp_scale_factor = %s"%(repr(exp_scale_factor),))
+        _log.debug("  |--> angle_rotation_ranges = %s"%(repr(angle_rotation_ranges),))
+        _log.debug("  |--> unmatched_stars_weight = %s"%(repr(unmatched_stars_weight),))
+        _log.debug("  \\--> max_listed_results = %s"%(repr(max_listed_results),))
+
         next_checkpoint = 1
 
         # This algoritm will test each star on the reference map against each start on the tile map
@@ -465,12 +516,16 @@ class StarMap:
         # Scores on which a ref star shows up. Should make search for scores already tested way way faster!
         templ_star_scores = {}
         best_score = 0
+        nxt_update = 0
         for templ_refA_star in range(len(self._stars)):
             progress = 100*templ_refA_star / len(self._stars)
             if progress > next_checkpoint:
                 pr.record_checkpoint("Match at %.2f%%"%(progress,))
                 next_checkpoint = int(progress) + 1
-            print("%.3f %% - Best score: %.2f out of %i checks"%(progress, best_score, len(scores)), end="\r", flush=True)
+            _t = time.time()
+            if _t > nxt_update:
+                print("%.3f %% - Best score: %.2f out of %i checks"%(progress, best_score, len(scores)), end="\r", flush=True)
+                nxt_update = _t + 0.5
 
             for tile_refA_star in range(len(tile._stars)):
                 
@@ -611,12 +666,6 @@ class StarMap:
                             tile_test_star_adj_angle = _adj_angle(tile._star_angles[tile_refA_star][tile_test_star] + adj_angle)
                             tile_test_star_adj_size = tile._stars[tile_test_star][STAR_SZ] * tile_scale_factor
 
-                            if DBG: _log.debug(f"        Finding a match for tile star {tile_test_star}")
-                            if DBG: _log.debug(f"          |--> Tile scale factor: %.4f"%(tile_scale_factor,))
-                            if DBG: _log.debug(f"          |--> adjusted distance to tile A star: {tile_test_star_adj_dist}")
-                            if DBG: _log.debug(f"          |--> adjusted size: {tile_test_star_adj_size}")
-                            if DBG: _log.debug(f"          |--> adjusted angle to tile A star: {tile_test_star_adj_angle}")
-
                             if _acc_debug:
                                 t5 = time.time()
                                 pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_1", t5 - t4)
@@ -628,13 +677,24 @@ class StarMap:
                             # will test in order by distance
                             templ_test_stars_scores = {}
                             
+                            if DBG:
+                                _log.debug(f"        Finding a match for tile star {tile_test_star}")
+                                _log.debug(f"          |--> Tile scale factor: %.4f"%(tile_scale_factor,))
+                                _log.debug(f"          |--> adjusted distance to tile A star: {tile_test_star_adj_dist}")
+                                _log.debug(f"          |--> adjusted size: {tile_test_star_adj_size}")
+                                _log.debug(f"          |--> adjusted angle to tile A star: {tile_test_star_adj_angle}")
+                                _log.debug(f"          |--> candidate stars to test (count): {len(self._stars_by_distance[templ_refA_star])}")
+
                             for templ_test_star in self._stars_by_distance[templ_refA_star]:
+                                if DBG: _log.debug(f"          |   |--> testing against ref star: {templ_test_star}")
                                 # Don't include temp ref B star on the comparison, it is already matched
                                 if templ_test_star == templ_refB_star:
+                                    if DBG: _log.debug(f"          |   |--> skipping ref B star")
                                     continue
                                 templ_test_star_dist = self._star_distances[templ_refA_star][templ_test_star]
                                 # I guess some random maps may put stars very very close to each other?
                                 if templ_test_star_dist < 0.1:
+                                    if DBG: _log.debug(f"          |   |--> skipping too-close of a star with distance {templ_test_star_dist}")
                                     continue
 
                                 if _acc_debug:
@@ -653,7 +713,7 @@ class StarMap:
                                     t5b = time.time()
                                     pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2.A_1", t5b - t5a)
 
-                                if DBG: _log.debug(f"          | Comparing against ref star {templ_test_star}")
+                                #if DBG: _log.debug(f"          | Comparing against ref star {templ_test_star}")
 
                                 # Distance error
                                 dist_err = abs(templ_test_star_dist - tile_test_star_adj_dist) * 100 / tile_max_star_dist_adj
@@ -712,7 +772,6 @@ class StarMap:
                                     t5e = time.time()
                                     pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2.D_1", t5e - t5d)
                                 
-                            
                             if _acc_debug:
                                 t6 = time.time()
                                 pr.record_segment_accumulated_duration("match_tile.score_calculation.phase_2", t6 - t5)
@@ -731,7 +790,44 @@ class StarMap:
                                 zero_score_count += 1
                                 if zero_score_count >= stop_after_miss_stars:
                                     break
-                        score.finalize(zero_score = zero_score_count >= stop_after_miss_stars)
+                        
+                        zero_score = zero_score_count >= stop_after_miss_stars
+                        unmatched_stars = None
+
+                        if (not zero_score):
+                            # now, let's check how many un-matched stars are there on the templ side inside the smallest box which contains all the matched stars
+                            matched_templ_stars = score.get_matched_templ_stars()
+                            if len(matched_templ_stars) > 0:
+                                if DBG:
+                                    _log.debug("Counting templ stars not matched inside the matched box")
+                                    _log.debug("matched stars to analyze: %s"%(matched_templ_stars,))
+                                min_x, max_x, min_y, max_y = self.get_min_size_box(matched_templ_stars)
+                                box_diag_size = math.sqrt((max_x - min_x)**2 + (max_y - min_y)**2)
+                                if DBG:
+                                    _log.debug("Box diag size: %s"%(box_diag_size,))
+                                unmatched_stars = 0
+                                for check_star in self._stars_by_distance[matched_templ_stars[0]]:
+                                    if check_star in matched_templ_stars:
+                                        if DBG: 
+                                            _log.debug("Skipping matched star: %s"%(check_star,))
+                                        continue
+                                    if self._star_distances[matched_templ_stars[0]][check_star] > box_diag_size:
+                                        if DBG: 
+                                            _log.debug("Stopping check at start %i with distance %s"%(check_star, self._star_distances[matched_templ_stars[0]][check_star]))
+                                        break
+                                    if self._stars[check_star][STAR_X] >= min_x and \
+                                        self._stars[check_star][STAR_X] <= max_x and \
+                                        self._stars[check_star][STAR_Y] >= min_y and \
+                                        self._stars[check_star][STAR_Y] <= max_y:
+                                        unmatched_stars += 1
+                                        if DBG:
+                                            _log.debug("Un-matched star inside the box: %s"%(check_star,))
+                                unmatched_ratio = len(matched_templ_stars) / (unmatched_stars + len(matched_templ_stars))
+                                if DBG:
+                                    _log.debug("Unmatched stars in box: %s"%(unmatched_stars,))
+                                    _log.debug("Unmatched stars ratio: %s"%(unmatched_ratio,))
+                        
+                        score.finalize(zero_score = zero_score, unmatched_stars = unmatched_stars, unmatched_stars_weight = unmatched_stars_weight)
                         best_score = max(best_score, score.score)
                         if DBG: _log.debug(f"    Final score: {score.score}")
         # Sort scores by score
@@ -744,14 +840,32 @@ class StarMap:
         
         score_bar_point_size = 80 / max_score
         for idx, score in enumerate(scores):
-            if score.score < 75:
-                _log.warning("Not showing results for %i scores below 75"%(len(scores) - idx))
+            #if score.score < 70:
+            #    _log.warning("Not showing results for %i scores below 70"%(len(scores) - idx))
+            #    break
+            if max_listed_results is not None and idx >= max_listed_results:
+                _log.warning("Not showing results for %i scores, limited to first %i results"%(len(scores) - idx, max_listed_results))
                 break
             score.set_ranking(idx)
             score.print_summary(show_hdr = idx <= show_result_details, score_bar_point_size = score_bar_point_size, list_matches = idx < show_result_details)
             
         
         return scores
+
+    def get_min_size_box(self, stars):
+        assert len(stars) > 0, "got no stars!"
+        min_x = max_x = min_y = max_y = None
+        for star in stars:
+            min_x = self._stars[star][STAR_X] if min_x is None else min(min_x, self._stars[star][STAR_X])
+            max_x = self._stars[star][STAR_X] if max_x is None else max(max_x, self._stars[star][STAR_X])
+            min_y = self._stars[star][STAR_Y] if min_y is None else min(min_y, self._stars[star][STAR_Y])
+            max_y = self._stars[star][STAR_Y] if max_y is None else max(max_y, self._stars[star][STAR_Y])
+        if DBG:
+            _log.debug("Min box size for stars")
+            _log.debug("  |--> stars: %s"%(repr(stars),))
+            _log.debug("  |--> X: %s - %i"%(min_x, max_x,))
+            _log.debug("  \\--> Y: %s - %i"%(min_y, max_y,))
+        return min_x, max_x, min_y, max_y
 
 def plot_map(map, title):
     import matplotlib.pyplot as plt

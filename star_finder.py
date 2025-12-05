@@ -8,6 +8,8 @@ import time
 from matplotlib import pyplot as plt
 import numpy as np
 
+import star_map
+
 import perf_recorder as _pr
 pr = _pr.get_perf_recorder()
 
@@ -19,7 +21,7 @@ from scipy.optimize import linear_sum_assignment
 _log = None
 
 def find_stars(image_path, 
-               gray_filter_threshold = 64,
+               gray_filter_threshold = 164,
                adaptive_block_size = 49,
                adaptive_sub_constant = 0,
                show_images = False,
@@ -42,20 +44,19 @@ def find_stars(image_path,
     pickle_name = f"{os.path.basename(image_path)}."  \
                   f"gft_{gray_filter_threshold}."   \
                   f"abz_{adaptive_block_size}."   \
-                  f"asc_{gray_filter_threshold}."   \
-                  f"bcft_{gray_filter_threshold}."   \
-                  f"bcfnc_{gray_filter_threshold}."   \
-                  f"mdbc_{gray_filter_threshold}."   \
-                  f"mncr_{gray_filter_threshold}."   \
-                  f"mxcr_{gray_filter_threshold}.pkl"
+                  f"asc_{adaptive_sub_constant}."   \
+                  f"bcft_{bad_circle_filter_threshold}."   \
+                  f"bcfnc_{bad_circle_filter_no_check}."   \
+                  f"mdbc_{min_dist_between_circles}."   \
+                  f"mncr_{min_circle_radius}."   \
+                  f"mxcr_{max_circle_radius}.pkl"
     
     pickle_name = os.path.abspath(os.path.join(pickle_dir, pickle_name))
     
     _log.info("Getting stars from %s"%(image_path,))
     if os.path.exists(pickle_name) and not force_scan:
         _log.info("Pickle exists, loading: %s"%(pickle_name,))
-        with open(pickle_name, "rb") as fh:
-            return pickle.load(fh)
+        return star_map.pickle_factory(pickle_name), pickle_name
 
     _log.info("Piclke does not exist, scanning image...")
     _log.info("  \\--> %s"%(repr(pickle_name)))
@@ -76,10 +77,10 @@ def find_stars(image_path,
     with open(pickle_name, "wb") as fh:
         pickle.dump(stars, fh)
     
-    return np.array(stars, dtype=float)
+    return np.array(stars, dtype=float), pickle_name
 
 def scan_stars(image_path, 
-               gray_filter_threshold = 64,
+               gray_filter_threshold = 164,
                adaptive_block_size = 49,
                adaptive_sub_constant = 0,
                show_images = False,
